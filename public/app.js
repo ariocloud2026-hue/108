@@ -7,23 +7,33 @@ const SUIT_NAME = { qarga: 'qarga', gisht: 'gisht', chirva: 'chirva', xoch: 'xoc
 const isRed = s => s === 'gisht' || s === 'chirva';
 
 const $ = id => document.getElementById(id);
-const show = el => el.classList.remove('hidden');
-const hide = el => el.classList.add('hidden');
+const show = el => el && el.classList.remove('hidden');
+const hide = el => el && el.classList.add('hidden');
 
 /* ---------- Shaxsiy ma'lumot ---------- */
 const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
 let myId = tgUser ? String(tgUser.id) : (localStorage.getItem('g108_id') || ('g' + Math.random().toString(36).slice(2, 10)));
 if (!tgUser) localStorage.setItem('g108_id', myId);
-let myName = tgUser ? (tgUser.first_name || 'O\'yinchi') : (localStorage.getItem('g108_name') || '');
+let myName = tgUser ? (tgUser.first_name || "O'yinchi") : (localStorage.getItem('g108_name') || '');
+
+// Guruhdagi havoladan kelgan xona kodi:  t.me/bot/play?startapp=1234
+const startParam = tg && tg.initDataUnsafe ? tg.initDataUnsafe.start_param : null;
+let autoJoinCode = /^\d{4}$/.test(String(startParam || '')) ? String(startParam) : null;
 
 let ws = null, S = null, roomCode = localStorage.getItem('g108_room') || null;
-let pendingCardId = null; // Q uchun mast tanlanayotgan karta
+let pendingCardId = null;
+let botInfo = { username: null, app: 'play' };
+
+fetch('/api/info').then(r => r.json()).then(d => { if (d) botInfo = d; }).catch(() => {});
 
 /* ---------- Ulanish ---------- */
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}`);
-  ws.onopen = () => send({ t: 'hello', tgId: myId, name: myName, roomCode });
+  ws.onopen = () => {
+    if (autoJoinCode && myName) { send({ t: 'join', tgId: myId, name: myName, code: autoJoinCode }); autoJoinCode = null; }
+    else send({ t: 'hello', tgId: myId, name: myName, roomCode });
+  };
   ws.onmessage = e => onMessage(JSON.parse(e.data));
   ws.onclose = () => { toast('Aloqa uzildi — qayta ulanmoqda…'); setTimeout(connect, 1500); };
 }
@@ -31,11 +41,18 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 
 function onMessage(m) {
   switch (m.t) {
-    case 'ready': roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); break;
+    case 'ready':
+      roomCode = null; localStorage.removeItem('g108_room');
+      if (autoJoinCode && myName) { send({ t: 'join', tgId: myId, name: myName, code: autoJoinCode }); autoJoinCode = null; }
+      else screenMenu();
+      break;
     case 'lobby': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderLobby(m); break;
     case 'state': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderState(m); break;
     case 'chathist': loadChat(m.chat); break;
     case 'chat': addChat(m.msg); break;
+    case 'call-peers': onCallPeers(m); break;
+    case 'call-left': onPeerLeft(m.id); break;
+    case 'rtc': onRtc(m); break;
     case 'error': toast(m.msg); break;
   }
 }
@@ -43,16 +60,14 @@ function onMessage(m) {
 /* ---------- Ekranlar ---------- */
 function screenMenu() {
   show($('menu')); hide($('lobby')); hide($('table'));
-  const fab = document.getElementById('chatFab'); if (fab) fab.classList.add('hidden');
-  hide($('resultModal')); hide($('voteModal')); hide($('suitModal'));
+  hide($('resultModal')); hide($('voteModal')); hide($('suitModal')); hide($('fabs'));
   $('nameInput').value = myName;
 }
-function screenLobby() { hide($('menu')); show($('lobby')); hide($('table')); }
-function screenTable() { hide($('menu')); hide($('lobby')); show($('table')); }
+function screenLobby() { hide($('menu')); show($('lobby')); hide($('table')); show($('fabs')); }
+function screenTable() { hide($('menu')); hide($('lobby')); show($('table')); show($('fabs')); }
 
 function renderLobby(m) {
   screenLobby();
-  show($('chatFab'));
   $('lobbyCode').textContent = m.code;
   const ul = $('lobbyPlayers'); ul.innerHTML = '';
   m.players.forEach(p => {
@@ -65,14 +80,14 @@ function renderLobby(m) {
   $('startBtn').classList.toggle('hidden', !m.isHost);
   $('startBtn').disabled = !canStart;
   $('lobbyHint').textContent = m.isHost
-    ? (canStart ? 'Hamma yig\'ilgach boshlang.' : 'Kamida 2 o\'yinchi kerak.')
+    ? (canStart ? "Hamma yig'ilgach boshlang." : "Kamida 2 o'yinchi kerak.")
     : 'Xona egasi boshlashini kuting.';
+  renderCallState(m);
 }
 
 function renderState(m) {
   if (m.phase === 'lobby') { renderLobby(m); return; }
   screenTable();
-  show($('chatFab'));
 
   // Raqiblar
   const wrap = $('opponents'); wrap.innerHTML = '';
@@ -91,30 +106,35 @@ function renderState(m) {
 
   // O'rtadagi kartalar
   $('drawCount').textContent = m.drawCount + ' karta';
-  const dp = $('discardPile');
-  dp.innerHTML = m.top ? cardHTML(m.top) : '<div class="pile-back" style="opacity:.25"></div>';
+  $('discardPile').innerHTML = m.top ? cardHTML(m.top) : '<div class="pile-back" style="opacity:.25"></div>';
 
   const badge = $('suitBadge');
-  if (m.mustPlay) {
-    badge.textContent = 'Olgan kartangizni tashlang';
-  } else if (m.awaitingLead) {
-    badge.textContent = 'Istalgan kartadan boshlang';
-  } else if (m.pendingDraw > 0) {
-    badge.textContent = `Jazo: ${m.pendingDraw} karta`;
-  } else {
-    badge.textContent = `Mast: ${SYM[m.currentSuit] || ''} ${SUIT_NAME[m.currentSuit] || ''}`;
-  }
+  if (m.mustPlay) badge.textContent = 'Olgan kartangizni tashlang';
+  else if (m.pendingDraw > 0) badge.textContent = `Jazo: ${m.pendingDraw} karta`;
+  else badge.textContent = `Mast: ${SYM[m.currentSuit] || ''} ${SUIT_NAME[m.currentSuit] || ''}`;
+
+  // Kartalar ketma-ketligi
+  const h = $('history'); h.innerHTML = '';
+  (m.history || []).forEach((c, i, arr) => {
+    const el = document.createElement('div');
+    el.className = 'hcard ' + (isRed(c.suit) ? 'red' : 'dark') + (i === arr.length - 1 ? ' last' : '');
+    el.title = c.by;
+    el.innerHTML = `${c.rank}<small>${SYM[c.suit]}</small>`;
+    h.appendChild(el);
+  });
+  h.scrollLeft = h.scrollWidth;
 
   // Navbat
   const me = m.players.find(p => p.id === m.youId);
   const cur = m.players.find(p => p.isCurrent);
   const banner = $('turnBanner');
-  if (m.youFolded) { banner.textContent = 'Siz bu raundda taslim bo\'ldingiz'; banner.className = 'turn-banner wait'; }
+  if (m.youFolded) { banner.textContent = "Siz bu raundda taslim bo'ldingiz"; banner.className = 'turn-banner wait'; }
   else if (m.yourTurn && m.mustPlay) { banner.textContent = '⬇️ Olgan kartangiz mos keldi — uni tashlang'; banner.className = 'turn-banner'; }
+  else if (m.yourTurn && m.mustMatch) { banner.textContent = '8 tashladingiz — mos karta chiqmaguncha oling'; banner.className = 'turn-banner'; }
   else if (m.yourTurn) { banner.textContent = 'Sizning navbatingiz'; banner.className = 'turn-banner'; }
   else { banner.textContent = cur ? `${cur.name} o'ynayapti…` : ''; banner.className = 'turn-banner wait'; }
 
-  // O'z qo'lim
+  // Qo'lim
   $('myName').textContent = me ? me.name : '';
   $('myScore').textContent = me ? `${me.cumulative} / ${m.limit}` : '';
   const hand = $('myHand'); hand.innerHTML = '';
@@ -128,16 +148,17 @@ function renderState(m) {
   });
 
   // Tugmalar
-  $('drawBtn').disabled = !m.yourTurn || m.awaitingLead || !!m.mustPlay;
-  $('drawBtn').textContent = m.pendingDraw > 0 && m.yourTurn ? `${m.pendingDraw} karta olish` : 'Karta olish';
+  $('drawBtn').disabled = !m.yourTurn || !!m.mustPlay;
+  $('drawBtn').textContent = m.yourTurn && m.pendingDraw > 0 ? `${m.pendingDraw} karta olish`
+    : (m.yourTurn && m.mustMatch ? 'Mos karta chiqquncha olish' : 'Karta olish');
   $('foldBtn').disabled = m.youFolded || m.phase !== 'playing';
   $('restartBtn').disabled = !m.canRestart;
   $('endBtn').disabled = !m.canEnd;
 
-  // Jurnal
   $('log').innerHTML = (m.log || []).map(l => `<div>${esc(l)}</div>`).join('');
   $('log').scrollTop = 999;
 
+  renderCallState(m);
   renderVote(m);
   renderResult(m);
 }
@@ -152,7 +173,7 @@ function renderVote(m) {
   const others = m.players.filter(p => p.id !== v.proposerId);
   const lines = others.map(p => {
     const val = v.votes[p.id];
-    return `${esc(p.name)}: ${val === 'yes' ? '✅ rozi' : val === 'no' ? '❌ yo\'q' : '… kutilmoqda'}`;
+    return `${esc(p.name)}: ${val === 'yes' ? '✅ rozi' : val === 'no' ? "❌ yo'q" : '… kutilmoqda'}`;
   });
   const note = v.kind === 'end'
     ? "Hamma rozi bo'lsagina o'yin yakunlanadi (eng kam ochkoli g'olib)."
@@ -192,7 +213,7 @@ function cardHTML(c, cls = '') {
   </div>`;
 }
 
-/* ---------- Harakatlar ---------- */
+/* ---------- O'yin harakatlari ---------- */
 function playCard(c) {
   haptic();
   if (c.rank === 'Q') { pendingCardId = c.id; show($('suitModal')); return; }
@@ -200,19 +221,19 @@ function playCard(c) {
 }
 $('startBtn').onclick = () => { haptic(); send({ t: 'start' }); };
 $('drawBtn').onclick = () => { haptic(); send({ t: 'draw' }); };
-$('foldBtn').onclick = () => { if (confirm('Rostdan taslim bo\'lasizmi? Qo\'lingizdagi kartalar ochko sifatida qo\'shiladi.')) send({ t: 'fold' }); };
-$('restartBtn').onclick = () => { if (confirm('O\'yinni qaytadan boshlashni taklif qilasizmi? Hamma rozi bo\'lsa ochkolar nolga qaytadi. (bir marta)')) send({ t: 'propose', kind: 'restart' }); };
-$('endBtn').onclick = () => { if (confirm('O\'yinni yakunlashni taklif qilasizmi? Hamma rozi bo\'lsa o\'yin tugaydi, eng kam ochkoli g\'olib bo\'ladi. (bir marta)')) send({ t: 'propose', kind: 'end' }); };
+$('drawPile').onclick = () => { if (S && S.yourTurn && !S.mustPlay) { haptic(); send({ t: 'draw' }); } };
+$('foldBtn').onclick = () => { if (confirm("Rostdan taslim bo'lasizmi? Qo'lingizdagi kartalar ochko sifatida qo'shiladi.")) send({ t: 'fold' }); };
+$('restartBtn').onclick = () => { if (confirm("O'yinni qaytadan boshlashni taklif qilasizmi? (bir marta)")) send({ t: 'propose', kind: 'restart' }); };
+$('endBtn').onclick = () => { if (confirm("O'yinni yakunlashni taklif qilasizmi? Eng kam ochkoli g'olib bo'ladi. (bir marta)")) send({ t: 'propose', kind: 'end' }); };
 $('voteYes').onclick = () => send({ t: 'vote', yes: true });
 $('voteNo').onclick = () => send({ t: 'vote', yes: false });
 $('nextRoundBtn').onclick = () => send({ t: 'next' });
-$('backMenuBtn').onclick = () => { send({ t: 'leave' }); roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); };
-$('leaveLobbyBtn').onclick = () => { send({ t: 'leave' }); roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); };
+$('backMenuBtn').onclick = () => { hangUp(); send({ t: 'leave' }); roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); };
+$('leaveLobbyBtn').onclick = () => { hangUp(); send({ t: 'leave' }); roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); };
 $('suitCancel').onclick = () => { pendingCardId = null; hide($('suitModal')); };
 document.querySelectorAll('.suit-choice').forEach(b => {
   b.onclick = () => { if (!pendingCardId) return; send({ t: 'play', cardId: pendingCardId, suit: b.dataset.suit }); pendingCardId = null; hide($('suitModal')); };
 });
-$('drawPile').onclick = () => { if (S && S.yourTurn && !S.awaitingLead && !S.mustPlay) { haptic(); send({ t: 'draw' }); } };
 
 $('createBtn').onclick = () => {
   const n = ($('nameInput').value || '').trim();
@@ -230,73 +251,197 @@ $('joinBtn').onclick = () => {
 };
 $('copyCodeBtn').onclick = () => {
   const code = $('lobbyCode').textContent;
-  navigator.clipboard && navigator.clipboard.writeText(code);
+  if (navigator.clipboard) navigator.clipboard.writeText(code);
   toast('Kod nusxalandi: ' + code);
 };
 
-/* ---------- Yordamchi ---------- */
-function toast(msg) {
-  const t = $('toast'); t.textContent = msg; show(t);
-  clearTimeout(t._h); t._h = setTimeout(() => hide(t), 2600);
-}
-function haptic() { try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred('light'); } catch (_) {} }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+/* ---------- Guruhga / do'stlarga yuborish ---------- */
+$('shareBtn').onclick = () => {
+  const code = $('lobbyCode').textContent;
+  const text = `108 o'ynaymiz! Xona kodi: ${code}`;
+  if (botInfo.username) {
+    const link = `https://t.me/${botInfo.username}/${botInfo.app || 'play'}?startapp=${code}`;
+    const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+    if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, '_blank');
+  } else {
+    if (navigator.clipboard) navigator.clipboard.writeText(text);
+    toast('Nusxalandi — do\'stlaringizga yuboring.');
+  }
+};
 
-/* ---------------------------------------------------------------- *
+/* ---------- Qo'llanma ---------- */
+[$('rulesBtn1'), $('rulesBtn2'), $('rulesBtn3')].forEach(b => { if (b) b.onclick = () => show($('rulesModal')); });
+$('rulesClose').onclick = () => hide($('rulesModal'));
+
+/* ================================================================= *
+ *  AUDIO / VIDEO QO'NG'IROQ (WebRTC — to'g'ridan-to'g'ri, mesh)
+ * ================================================================= */
+const ICE = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+] };
+let localStream = null, callMode = null, peers = {}; // id -> RTCPeerConnection
+
+$('callFab').onclick = () => show($('callPanel'));
+$('callClose').onclick = () => hide($('callPanel'));
+$('callAudioBtn').onclick = () => startCall('audio');
+$('callVideoBtn').onclick = () => startCall('video');
+$('callLeaveBtn').onclick = () => { hangUp(); hide($('callPanel')); };
+
+async function startCall(mode) {
+  if (localStream) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia(
+      mode === 'video' ? { audio: true, video: { width: 320, height: 240 } } : { audio: true });
+  } catch (e) { return toast('Mikrofon/kameraga ruxsat berilmadi.'); }
+  callMode = mode;
+  addTile('me', myName + ' (siz)', localStream, true);
+  send({ t: 'call', action: 'join', mode });
+  $('callJoin').classList.add('hidden');
+  $('callActive').classList.remove('hidden');
+  $('camBtn').classList.toggle('hidden', mode !== 'video');
+  $('callFab').classList.add('live');
+  show($('callStrip'));
+  hide($('callPanel'));
+  toast(mode === 'video' ? 'Video qo\'ng\'iroq boshlandi' : 'Audio qo\'ng\'iroq boshlandi');
+}
+
+function hangUp() {
+  if (!localStream) return;
+  send({ t: 'call', action: 'leave' });
+  Object.values(peers).forEach(pc => { try { pc.close(); } catch (_) {} });
+  peers = {};
+  localStream.getTracks().forEach(t => t.stop());
+  localStream = null; callMode = null;
+  $('callStrip').innerHTML = '';
+  hide($('callStrip'));
+  $('callFab').classList.remove('live');
+  $('callJoin').classList.remove('hidden');
+  $('callActive').classList.add('hidden');
+}
+
+function makePeer(id, name) {
+  if (peers[id]) return peers[id];
+  const pc = new RTCPeerConnection(ICE);
+  peers[id] = pc;
+  if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  pc.onicecandidate = e => { if (e.candidate) send({ t: 'rtc', to: id, kind: 'ice', data: e.candidate }); };
+  pc.ontrack = e => addTile(id, name || 'O\'yinchi', e.streams[0], false);
+  pc.onconnectionstatechange = () => {
+    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) onPeerLeft(id);
+  };
+  return pc;
+}
+
+// Men qo'shildim → mavjud a'zolarga taklif yuboraman
+async function onCallPeers(m) {
+  for (const id of (m.peers || [])) {
+    const pc = makePeer(id, null);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    send({ t: 'rtc', to: id, kind: 'offer', data: offer });
+  }
+}
+
+async function onRtc(m) {
+  if (!localStream) return; // qo'ng'iroqda emasman
+  const pc = makePeer(m.from, m.name);
+  try {
+    if (m.kind === 'offer') {
+      await pc.setRemoteDescription(new RTCSessionDescription(m.data));
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      send({ t: 'rtc', to: m.from, kind: 'answer', data: ans });
+    } else if (m.kind === 'answer') {
+      await pc.setRemoteDescription(new RTCSessionDescription(m.data));
+    } else if (m.kind === 'ice') {
+      await pc.addIceCandidate(new RTCIceCandidate(m.data));
+    }
+  } catch (e) { console.error('rtc:', e.message); }
+}
+
+function onPeerLeft(id) {
+  if (peers[id]) { try { peers[id].close(); } catch (_) {} delete peers[id]; }
+  const tile = document.getElementById('tile_' + id);
+  if (tile) tile.remove();
+}
+
+function addTile(id, name, stream, muted) {
+  let tile = document.getElementById('tile_' + id);
+  if (!tile) {
+    tile = document.createElement('div');
+    tile.id = 'tile_' + id;
+    tile.className = 'call-tile';
+    tile.innerHTML = `<div class="avatar">🎙</div><video autoplay playsinline${muted ? ' muted' : ''}></video><span class="cname">${esc(name)}</span>`;
+    $('callStrip').appendChild(tile);
+  }
+  const v = tile.querySelector('video');
+  v.srcObject = stream;
+  const hasVideo = stream.getVideoTracks().length > 0;
+  tile.querySelector('.avatar').style.display = hasVideo ? 'none' : 'grid';
+  v.style.display = hasVideo ? 'block' : 'none';
+}
+
+$('muteBtn').onclick = () => {
+  if (!localStream) return;
+  const tr = localStream.getAudioTracks()[0]; if (!tr) return;
+  tr.enabled = !tr.enabled;
+  $('muteBtn').classList.toggle('off', !tr.enabled);
+  $('muteBtn').textContent = tr.enabled ? '🎙 Mikrofon' : '🔇 O\'chiq';
+};
+$('camBtn').onclick = () => {
+  if (!localStream) return;
+  const tr = localStream.getVideoTracks()[0]; if (!tr) return;
+  tr.enabled = !tr.enabled;
+  $('camBtn').classList.toggle('off', !tr.enabled);
+  $('camBtn').textContent = tr.enabled ? '📹 Kamera' : '📵 O\'chiq';
+};
+
+function renderCallState(m) {
+  const c = m.call;
+  const info = $('callInfo');
+  if (c && c.members.length) {
+    info.textContent = `Qo'ng'iroqda: ${c.members.map(x => x.name).join(', ')}`;
+    $('callFab').classList.add('live');
+  } else {
+    info.textContent = "Birga gaplashib o'ynash uchun qo'shiling.";
+    if (!localStream) $('callFab').classList.remove('live');
+  }
+}
+
+/* ================================================================= *
  *  CHAT — matn, rasm, ovozli xabar
- * ---------------------------------------------------------------- */
+ * ================================================================= */
 const seenChat = new Set();
-let chatOpen = false;
-
 function chatVisible() { return !$('chatPanel').classList.contains('hidden'); }
-
-function openChat() {
-  show($('chatPanel')); hide($('chatDot')); chatOpen = true;
-  $('chatBody').scrollTop = $('chatBody').scrollHeight;
-}
-function closeChat() { hide($('chatPanel')); chatOpen = false; }
+function openChat() { show($('chatPanel')); hide($('chatDot')); $('chatBody').scrollTop = $('chatBody').scrollHeight; }
+function closeChat() { hide($('chatPanel')); }
 
 $('chatFab').onclick = () => chatVisible() ? closeChat() : openChat();
 $('chatClose').onclick = closeChat;
-$('lobbyChatBtn').onclick = openChat;
 
-function loadChat(list) {
-  show($('chatFab'));
-  if (!Array.isArray(list)) return;
-  list.forEach(msg => addChat(msg, true));
-}
+function loadChat(list) { if (Array.isArray(list)) list.forEach(msg => addChat(msg, true)); }
 
 function addChat(msg, silent) {
   if (!msg || seenChat.has(msg.id)) return;
   seenChat.add(msg.id);
-
   const b = document.createElement('div');
   const mine = msg.from === myId;
   b.className = 'bubble' + (mine ? ' me' : '');
-
   let inner = mine ? '' : `<span class="who">${esc(msg.name)}</span>`;
-  if (msg.kind === 'text') {
-    inner += esc(msg.data);
-  } else if (msg.kind === 'image') {
-    inner += `<img src="${msg.data}" alt="rasm" />`;
-  } else if (msg.kind === 'voice') {
-    inner += `<audio controls preload="metadata" src="${msg.data}"></audio>`;
-  }
+  if (msg.kind === 'text') inner += esc(msg.data);
+  else if (msg.kind === 'image') inner += `<img src="${msg.data}" alt="rasm" />`;
+  else if (msg.kind === 'voice') inner += `<audio controls preload="metadata" src="${msg.data}"></audio>`;
   b.innerHTML = inner;
-
   const img = b.querySelector('img');
   if (img) img.onclick = () => { $('imgBig').src = msg.data; show($('imgModal')); };
-
   const body = $('chatBody');
   body.appendChild(b);
   body.scrollTop = body.scrollHeight;
-
   if (!silent && !chatVisible() && !mine) { show($('chatDot')); haptic(); }
 }
-
 $('imgModal').onclick = () => hide($('imgModal'));
 
-/* --- Matn yuborish --- */
 function sendText() {
   const v = $('chatText').value.trim();
   if (!v) return;
@@ -306,19 +451,17 @@ function sendText() {
 $('chatSend').onclick = sendText;
 $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
 
-/* --- Rasm yuborish (kichraytirib) --- */
 $('imgBtn').onclick = () => $('imgInput').click();
 $('imgInput').onchange = e => {
   const f = e.target.files && e.target.files[0];
   e.target.value = '';
-  if (!f) return;
-  if (!f.type.startsWith('image/')) return toast('Bu rasm emas.');
+  if (!f || !f.type.startsWith('image/')) return;
   const reader = new FileReader();
   reader.onload = () => {
     const im = new Image();
     im.onload = () => {
       const MAX = 900;
-      let { width: w, height: h } = im;
+      let w = im.width, h = im.height;
       if (w > MAX || h > MAX) { const k = MAX / Math.max(w, h); w = Math.round(w * k); h = Math.round(h * k); }
       const cv = document.createElement('canvas');
       cv.width = w; cv.height = h;
@@ -328,22 +471,18 @@ $('imgInput').onchange = e => {
       send({ t: 'chat', kind: 'image', data });
       if (!chatVisible()) openChat();
     };
-    im.onerror = () => toast('Rasmni o\'qib bo\'lmadi.');
     im.src = reader.result;
   };
   reader.readAsDataURL(f);
 };
 
-/* --- Ovozli xabar --- */
 let rec = null, recChunks = [], recTimer = null, recStart = 0;
-
 $('micBtn').onclick = async () => {
   if (rec) return;
-  if (!navigator.mediaDevices || !window.MediaRecorder) return toast('Qurilma ovoz yozishni qo\'llamaydi.');
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Qurilma ovoz yozishni qo'llamaydi.");
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
-      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find(m => MediaRecorder.isTypeSupported(m)) || '';
     rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     recChunks = [];
     rec.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
@@ -370,15 +509,23 @@ $('micBtn').onclick = async () => {
     recTimer = setInterval(() => {
       const s = Math.round((Date.now() - recStart) / 1000);
       $('recTime').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-      if (s >= 60) $('recStop').click(); // maksimum 60 soniya
+      if (s >= 60) $('recStop').click();
     }, 250);
-  } catch (err) {
-    toast('Mikrofonga ruxsat berilmadi.');
-  }
+  } catch (err) { toast('Mikrofonga ruxsat berilmadi.'); }
 };
 $('recStop').onclick = () => { if (rec && rec.state !== 'inactive') { rec._cancelled = false; rec.stop(); } };
 $('recCancel').onclick = () => { if (rec && rec.state !== 'inactive') { rec._cancelled = true; rec.stop(); } };
 
+/* ---------- Yordamchi ---------- */
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; show(t);
+  clearTimeout(t._h); t._h = setTimeout(() => hide(t), 2600);
+}
+function haptic() { try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred('light'); } catch (_) {} }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
 /* ---------- Ishga tushirish ---------- */
+if (autoJoinCode && !myName) { myName = "O'yinchi"; }
 screenMenu();
+if (autoJoinCode) $('codeInput').value = autoJoinCode;
 connect();
