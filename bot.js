@@ -17,8 +17,14 @@ async function call(method, body) {
   return r.json();
 }
 
+let botUsername = null;
+const APP_SHORT_NAME = process.env.APP_SHORT_NAME || 'play'; // BotFather /newapp da bergan "short name"
+function getInfo() { return { username: botUsername, app: APP_SHORT_NAME }; }
+
 // Pastdagi "menyu" tugmasini ham Mini App qilib qo'yamiz
 async function setup() {
+  const me = await call('getMe', {});
+  if (me && me.ok) { botUsername = me.result.username; console.log('Bot: @' + botUsername); }
   await call('setChatMenuButton', {
     menu_button: { type: 'web_app', text: "108 o'ynash", web_app: { url: APP_URL } },
   });
@@ -92,7 +98,7 @@ function startBot() {
   setup().then(poll).catch(e => console.error('bot xatosi:', e.message));
 }
 
-module.exports = { startBot };
+module.exports = { startBot, getInfo };
 
 // Alohida ishga tushirilsa (node bot.js) — o'zi boshlaydi
 if (require.main === module) startBot();
