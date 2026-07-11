@@ -91,7 +91,9 @@ function renderState(m) {
   dp.innerHTML = m.top ? cardHTML(m.top) : '<div class="pile-back" style="opacity:.25"></div>';
 
   const badge = $('suitBadge');
-  if (m.awaitingLead) {
+  if (m.mustPlay) {
+    badge.textContent = 'Olgan kartangizni tashlang';
+  } else if (m.awaitingLead) {
     badge.textContent = 'Istalgan kartadan boshlang';
   } else if (m.pendingDraw > 0) {
     badge.textContent = `Jazo: ${m.pendingDraw} karta`;
@@ -104,6 +106,7 @@ function renderState(m) {
   const cur = m.players.find(p => p.isCurrent);
   const banner = $('turnBanner');
   if (m.youFolded) { banner.textContent = 'Siz bu raundda taslim bo\'ldingiz'; banner.className = 'turn-banner wait'; }
+  else if (m.yourTurn && m.mustPlay) { banner.textContent = '⬇️ Olgan kartangiz mos keldi — uni tashlang'; banner.className = 'turn-banner'; }
   else if (m.yourTurn) { banner.textContent = 'Sizning navbatingiz'; banner.className = 'turn-banner'; }
   else { banner.textContent = cur ? `${cur.name} o'ynayapti…` : ''; banner.className = 'turn-banner wait'; }
 
@@ -121,7 +124,7 @@ function renderState(m) {
   });
 
   // Tugmalar
-  $('drawBtn').disabled = !m.yourTurn || m.awaitingLead;
+  $('drawBtn').disabled = !m.yourTurn || m.awaitingLead || !!m.mustPlay;
   $('drawBtn').textContent = m.pendingDraw > 0 && m.yourTurn ? `${m.pendingDraw} karta olish` : 'Karta olish';
   $('foldBtn').disabled = m.youFolded || m.phase !== 'playing';
   $('restartBtn').disabled = !m.canRestart;
@@ -205,7 +208,7 @@ $('suitCancel').onclick = () => { pendingCardId = null; hide($('suitModal')); };
 document.querySelectorAll('.suit-choice').forEach(b => {
   b.onclick = () => { if (!pendingCardId) return; send({ t: 'play', cardId: pendingCardId, suit: b.dataset.suit }); pendingCardId = null; hide($('suitModal')); };
 });
-$('drawPile').onclick = () => { if (S && S.yourTurn && !S.awaitingLead) { haptic(); send({ t: 'draw' }); } };
+$('drawPile').onclick = () => { if (S && S.yourTurn && !S.awaitingLead && !S.mustPlay) { haptic(); send({ t: 'draw' }); } };
 
 $('createBtn').onclick = () => {
   const n = ($('nameInput').value || '').trim();
