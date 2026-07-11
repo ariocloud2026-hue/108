@@ -123,6 +123,7 @@ function startRound(room) {
     currentRank: null,
     pendingDraw: 0,
     pendingType: null,     // '6' | '7' | 'K'
+    mustPlay: null,        // taladan olingan karta mos kelsa — shuni tashlash shart
     order: parts.map(p => p.id),
     pos: 0,
     awaitingLead: false,
@@ -178,6 +179,7 @@ function allFoldedButOne(room) { return inRoundPlayers(room).length <= 1; }
 
 // Ushbu karta hozir tashlansa bo'ladimi?
 function canPlay(st, card) {
+  if (st.mustPlay) return card.id === st.mustPlay; // olingan karta mos kelgan — faqat shuni tashlaydi
   if (st.awaitingLead) return true; // boshlovchi istalganini tashlaydi
   if (st.pendingDraw > 0) {
     if (st.pendingType === '6') return card.rank === '6';
@@ -256,6 +258,7 @@ function handlePlay(room, player, cardId, declaredSuit) {
   player.hand.splice(idx, 1);
   st.discard.push(card);
   st.awaitingLead = false;
+  st.mustPlay = null;
   addLog(room, `${player.name}: ${cardText(card)}`);
 
   // Qo'l tugadi — raund yakuni (g'olib)
@@ -282,9 +285,18 @@ function handleDraw(room, player) {
     st.pendingDraw = 0; st.pendingType = null;
     advance(room, 1);
   } else {
+    const before = player.hand.length;
     const got = drawN(room, player, 1);
-    addLog(room, got ? `${player.name} 1 karta oldi.` : `${player.name}: talada karta yo'q.`);
-    advance(room, 1);
+    const card = got ? player.hand[player.hand.length - 1] : null;
+
+    if (card && canPlay(st, card)) {
+      // Olingan karta mos keldi — o'yinchi shuni tashlashi SHART, xod o'tmaydi
+      st.mustPlay = card.id;
+      addLog(room, `${player.name} 1 karta oldi — mos keldi, tashlashi kerak.`);
+    } else {
+      addLog(room, got ? `${player.name} 1 karta oldi (mos kelmadi).` : `${player.name}: talada karta yo'q.`);
+      advance(room, 1);
+    }
   }
   broadcastState(room);
 }
@@ -294,6 +306,7 @@ function handleFold(room, player) {
   if (room.pendingVote) return err(player, 'Ovoz berish tugashini kuting.');
   if (player.foldedThisRound) return err(player, 'Siz allaqachon taslim bo\'lgansiz.');
   player.foldedThisRound = true;
+  if (room.st) room.st.mustPlay = null;
   addLog(room, `${player.name} taslim bo'ldi (sdatsya).`);
 
   // Faqat bitta o'yinchi qolsa — u g'olib
@@ -496,6 +509,7 @@ function stateFor(room, me) {
     base.pendingType = st.pendingType;
     base.drawCount = st.drawPile.length;
     base.awaitingLead = st.awaitingLead;
+    base.mustPlay = st.mustPlay;
     base.currentPlayerId = currentId(room);
     base.yourTurn = currentId(room) === me.id && !me.foldedThisRound;
     base.you = { hand: me.hand || [] };
