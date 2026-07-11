@@ -1,0 +1,16 @@
+{
+  "name": "game-108",
+  "version": "1.0.0",
+  "description": "108 - Telegram Mini App karta o'yini (onlayn, 2-6 o'yinchi)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
