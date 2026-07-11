@@ -8,7 +8,12 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 
 const app = express();
-app.use(express.static(path.join(__dirname, 'public')));
+// Keshni o'chiramiz — Telegram eski fayllarni saqlab qolmasligi uchun
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate'),
+}));
 app.get('/health', (_req, res) => res.send('ok'));
 
 const server = http.createServer(app);
