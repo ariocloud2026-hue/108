@@ -1,594 +1,205 @@
-/*  108 — Telegram Mini App karta o'yini
- *  Server: Express (statik fayllar) + WebSocket (real-time o'yin).
- *  Butun o'yin mantig'i shu yerda — mijoz (frontend) faqat ko'rsatadi va yuboradi.
- */
-const path = require('path');
-const http = require('http');
-const express = require('express');
-const { WebSocketServer } = require('ws');
-
-const app = express();
-// Keshni o'chiramiz — Telegram eski fayllarni saqlab qolmasligi uchun
-app.use(express.static(path.join(__dirname, 'public'), {
-  etag: false,
-  lastModified: false,
-  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate'),
-}));
-app.get('/health', (_req, res) => res.send('ok'));
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('108 server ishga tushdi: port ' + PORT));
-
-/* ----------------------------------------------------------------------- *
- *  O'YIN KONSTANTALARI
- * ----------------------------------------------------------------------- */
-const SUITS = ['qarga', 'gisht', 'chirva', 'xoch']; // ♠ ♦ ♥ ♣
-const RANKS = ['6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-const HAND_SIZE = 4;
-const LOSE_LIMIT = 108;
-
-// Sanoqdagi oddiy qiymat
-const VALUE = { '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 2, 'Q': 3, 'K': 4, 'A': 11 };
-
-// Raund boshidagi ochiladigan karta maxsus bo'lmasligi kerak (1-raund)
-function isSpecialStart(c) {
-  return ['6', '7', '8', 'Q', 'A'].includes(c.rank) || (c.rank === 'K' && c.suit === 'qarga');
+:root{
+  --bg-0:#0a2a30; --bg-1:#0e3a3d; --bg-2:#12474a;
+  --gold:#e7b24c; --gold-dim:#b98a34;
+  --turq:#4fd1c5; --turq-dim:#2f9c93;
+  --cream:#f5eedd; --ink:#182226; --red:#c8412b;
+  --warn:#d9663f; --line:rgba(231,178,76,.22);
+  --txt:#eaf3f1; --muted:#9fc0bd;
+  --radius:16px;
 }
-
-function buildDeck() {
-  const deck = [];
-  for (const s of SUITS) for (const r of RANKS) deck.push({ rank: r, suit: s, id: r + '_' + s });
-  return deck;
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  font-family:'Inter',system-ui,sans-serif;color:var(--txt);
+  background:
+    radial-gradient(120% 80% at 50% -10%, var(--bg-2), transparent 60%),
+    radial-gradient(140% 90% at 50% 110%, #072024, transparent 55%),
+    var(--bg-0);
+  background-attachment:fixed;
+  overflow-x:hidden;
 }
-function shuffle(a) {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+#app{max-width:560px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top) + 14px) 16px calc(env(safe-area-inset-bottom) + 16px)}
+.hidden{display:none !important}
 
-// Qo'ldagi kartalar yig'indisi (raund oxirida qo'shiladigan ochko)
-function handScore(hand) {
-  if (hand.length === 1) {
-    const c = hand[0];
-    if (c.rank === 'Q' && c.suit === 'qarga') return 40; // yolg'iz Q qarga
-    if (c.rank === 'Q') return 20;                        // yolg'iz Q
-    if (c.rank === 'K' && c.suit === 'qarga') return 80;  // yolg'iz K qarga
-    return VALUE[c.rank];
-  }
-  return hand.reduce((s, c) => s + VALUE[c.rank], 0);
-}
+/* ---------- Umumiy elementlar ---------- */
+.btn{border:0;border-radius:12px;padding:14px 16px;font:600 16px/1 'Inter';cursor:pointer;
+  width:100%;margin-top:10px;transition:transform .06s ease, filter .15s ease}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:linear-gradient(180deg,var(--gold),var(--gold-dim));color:#26190a;box-shadow:0 6px 18px rgba(231,178,76,.25)}
+.btn-ghost{background:rgba(255,255,255,.06);color:var(--txt);border:1px solid var(--line)}
+.btn-warn{background:linear-gradient(180deg,#e0764c,#b34e2c);color:#fff}
+.btn-text{background:none;color:var(--muted);box-shadow:none;font-weight:500}
+.btn-mini{width:auto;padding:8px 12px;font-size:13px;margin:0;background:rgba(255,255,255,.08);color:var(--txt);border:1px solid var(--line)}
+.btn:disabled{opacity:.4;filter:grayscale(.4);cursor:not-allowed}
+.hint{color:var(--muted);font-size:13px;text-align:center;margin:12px 4px 0;line-height:1.5}
 
-/* ----------------------------------------------------------------------- *
- *  XONALAR
- * ----------------------------------------------------------------------- */
-const rooms = new Map(); // code -> room
+.screen{flex:1;display:flex;flex-direction:column;justify-content:center;animation:fade .3s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
-function makeCode() {
-  let code;
-  do { code = String(Math.floor(1000 + Math.random() * 9000)); } while (rooms.has(code));
-  return code;
-}
+/* ---------- Bosh menyu ---------- */
+.brand{text-align:center;margin-bottom:26px}
+.brand-mark{font-family:'Bricolage Grotesque';font-weight:800;font-size:88px;line-height:.9;
+  color:var(--gold);letter-spacing:-2px;
+  text-shadow:0 2px 0 var(--gold-dim),0 14px 40px rgba(231,178,76,.25)}
+.brand-sub{color:var(--muted);letter-spacing:3px;text-transform:uppercase;font-size:12px;margin-top:8px}
+.card-pad{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:var(--radius);
+  padding:18px;backdrop-filter:blur(6px)}
+.field{display:block;margin-bottom:6px}
+.field span{display:block;font-size:12px;color:var(--muted);margin:6px 2px}
+.field input{width:100%;padding:14px;border-radius:12px;border:1px solid var(--line);
+  background:rgba(0,0,0,.25);color:var(--txt);font:600 17px 'Inter';text-align:center;letter-spacing:1px}
+.field input:focus{outline:2px solid var(--turq-dim);border-color:transparent}
+.divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:14px 0 4px}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
 
-function createRoom(hostId) {
-  const code = makeCode();
-  const room = {
-    code,
-    hostId,
-    phase: 'lobby',          // lobby | playing | roundover | gameover
-    roundNumber: 0,
-    players: [],             // {id,name,ws,connected,hand,cumulative,eliminated,foldedThisRound,usedProposal,roundDelta}
-    st: null,                // o'yin holati
-    lastWinnerId: null,
-    pendingVote: null,       // {proposerId, votes:{id:'yes'|'no'}}
-    log: [],
-  };
-  rooms.set(code, room);
-  return room;
-}
+/* ---------- Lobbi ---------- */
+.lobby-head{display:flex;align-items:center;justify-content:space-between;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.lobby-code span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:2px}
+.lobby-code strong{font-family:'Bricolage Grotesque';font-size:34px;color:var(--gold);letter-spacing:6px}
+.players-title{margin:22px 4px 10px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:2px}
+.players-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+.players-list li{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.05);
+  border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-weight:600}
+.players-list .dot{width:9px;height:9px;border-radius:50%;background:var(--turq);box-shadow:0 0 8px var(--turq)}
+.players-list .dot.off{background:#5b6f6d;box-shadow:none}
+.players-list .tag{margin-left:auto;font-size:11px;color:var(--ink);background:var(--gold);padding:3px 8px;border-radius:20px;font-weight:700}
 
-function addLog(room, text) {
-  room.log.push(text);
-  if (room.log.length > 8) room.log.shift();
-}
+/* ---------- O'yin stoli ---------- */
+#table{justify-content:flex-start;gap:6px}
+.table-top{min-height:76px}
+.opponents{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding-top:4px}
+.opp{position:relative;min-width:82px;background:rgba(255,255,255,.05);border:1px solid var(--line);
+  border-radius:14px;padding:8px 8px 10px;text-align:center;transition:box-shadow .2s}
+.opp.current{border-color:var(--turq);box-shadow:0 0 0 2px var(--turq-dim),0 0 22px rgba(79,209,197,.35)}
+.opp.folded{opacity:.45}
+.opp.elim{opacity:.35;filter:grayscale(1)}
+.opp .oname{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;margin:0 auto}
+.opp .ocards{display:inline-flex;gap:2px;margin:5px 0 4px}
+.opp .mini{width:12px;height:17px;border-radius:3px;background:linear-gradient(160deg,#164b4f,#0c3033);border:1px solid var(--gold-dim)}
+.opp .oscore{font-size:12px;color:var(--gold);font-weight:700}
+.opp .obadge{position:absolute;top:-7px;right:-6px;font-size:10px;background:var(--warn);color:#fff;padding:2px 6px;border-radius:20px;font-weight:700}
+.opp .hosttag{position:absolute;top:-7px;left:-6px;font-size:10px;background:var(--gold);color:#26190a;padding:2px 6px;border-radius:20px;font-weight:800}
 
-function findPlayer(room, id) { return room.players.find(p => p.id === id); }
-function activePlayers(room) { return room.players.filter(p => !p.eliminated); }
+.table-center{position:relative;display:flex;gap:22px;justify-content:center;align-items:center;
+  padding:18px 0 8px;min-height:150px}
+.pile{width:88px;height:124px;border-radius:12px;display:flex;align-items:center;justify-content:center;position:relative}
+.draw-pile{cursor:pointer}
+.pile-back{position:absolute;inset:0;border-radius:12px;
+  background:
+    repeating-linear-gradient(45deg,rgba(231,178,76,.14) 0 6px,transparent 6px 12px),
+    linear-gradient(160deg,#15494d,#0b3033);
+  border:2px solid var(--gold-dim);box-shadow:0 8px 20px rgba(0,0,0,.35)}
+.pile-label{position:absolute;bottom:-22px;font-size:12px;color:var(--muted)}
+.suit-badge{position:absolute;top:-6px;left:50%;transform:translateX(-50%);
+  font-size:13px;font-weight:700;color:var(--ink);background:var(--gold);
+  padding:4px 12px;border-radius:20px;box-shadow:0 4px 12px rgba(0,0,0,.3);white-space:nowrap}
 
-/* ----------------------------------------------------------------------- *
- *  RAUNDNI BOSHLASH
- * ----------------------------------------------------------------------- */
-function startRound(room) {
-  room.roundNumber++;
-  const parts = activePlayers(room);
-  parts.forEach(p => { p.hand = []; p.foldedThisRound = false; p.roundDelta = 0; });
+.turn-banner{text-align:center;font-weight:700;min-height:24px;color:var(--turq);font-size:15px;letter-spacing:.3px}
+.turn-banner.wait{color:var(--muted);font-weight:600}
 
-  const deck = shuffle(buildDeck());
-  for (let i = 0; i < HAND_SIZE; i++) for (const p of parts) p.hand.push(deck.pop());
+/* ---------- Karta ---------- */
+.playcard{width:66px;height:96px;border-radius:10px;background:var(--cream);color:var(--ink);
+  position:relative;flex:0 0 auto;box-shadow:0 6px 14px rgba(0,0,0,.32);
+  border:1px solid #d8cba7;font-family:'Bricolage Grotesque'}
+.playcard .r{position:absolute;top:6px;left:8px;font-size:20px;font-weight:800;line-height:1}
+.playcard .s{position:absolute;bottom:6px;right:8px;font-size:20px;line-height:1}
+.playcard .c{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:34px;opacity:.9}
+.playcard.red{color:var(--red)} .playcard.dark{color:var(--ink)}
+.discard-pile .playcard{width:88px;height:124px;transform:rotate(-4deg)}
+.discard-pile .playcard .r{font-size:24px} .discard-pile .playcard .c{font-size:44px} .discard-pile .playcard .s{font-size:24px}
 
-  const st = {
-    drawPile: deck,
-    discard: [],
-    currentSuit: null,
-    currentRank: null,
-    pendingDraw: 0,
-    pendingType: null,     // '6' | '7' | 'K'
-    order: parts.map(p => p.id),
-    pos: 0,
-    awaitingLead: false,
-  };
+/* Qo'l */
+.my-area{margin-top:auto;padding-top:6px}
+.my-meta{display:flex;justify-content:space-between;align-items:baseline;padding:0 4px 6px}
+.my-name{font-weight:700}
+.my-score{color:var(--gold);font-weight:700;font-size:14px}
+.hand{display:flex;gap:8px;overflow-x:auto;padding:8px 4px 14px;scroll-snap-type:x proximity}
+.hand .playcard{scroll-snap-align:center;transition:transform .12s ease}
+.hand .playcard.playable{cursor:pointer;box-shadow:0 0 0 2px var(--turq),0 8px 18px rgba(0,0,0,.35);transform:translateY(-8px)}
+.hand .playcard.playable:active{transform:translateY(-2px)}
+.hand .playcard.dim{opacity:.5}
+.actions{display:flex;gap:8px}
+.actions .btn{margin-top:0}
+#proposeBtn{flex:1.3}
 
-  if (room.roundNumber === 1) {
-    // 1-raund: o'rtaga karta ochiladi (maxsus bo'lmaganini tanlaymiz), random o'yinchi boshlaydi
-    let start = deck.pop();
-    const skipped = [];
-    while (start && isSpecialStart(start) && deck.length) { skipped.push(start); start = deck.pop(); }
-    deck.unshift(...skipped);
-    st.discard.push(start);
-    st.currentSuit = start.suit;
-    st.currentRank = start.rank;
-    st.pos = Math.floor(Math.random() * st.order.length);
-    addLog(room, `1-raund boshlandi. O'rtada: ${cardText(start)}. Boshlaydi: ${nameOf(room, st.order[st.pos])}`);
-  } else {
-    // 2+ raund: o'rtaga karta ochilmaydi. Ochkosi eng baland o'yinchi xohlagan kartasidan boshlaydi
-    let starterId = parts[0].id, best = -Infinity;
-    for (const p of parts) if (p.cumulative > best) { best = p.cumulative; starterId = p.id; }
-    st.pos = st.order.indexOf(starterId);
-    st.awaitingLead = true; // boshlovchi istalgan kartani tashlaydi
-    addLog(room, `${room.roundNumber}-raund. Ochkosi baland ${nameOf(room, starterId)} istalgan karta bilan boshlaydi.`);
-  }
+.log{margin-top:10px;font-size:12px;color:var(--muted);line-height:1.6;
+  background:rgba(0,0,0,.2);border-radius:12px;padding:8px 12px;min-height:44px;max-height:96px;overflow-y:auto}
+.log div{opacity:.9}
+.log div:last-child{color:var(--txt)}
 
-  room.st = st;
-  room.phase = 'playing';
-}
+/* ---------- Modallar ---------- */
+.modal{position:fixed;inset:0;background:rgba(4,16,18,.72);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;animation:fade .2s}
+.modal-box{width:100%;max-width:380px;background:linear-gradient(180deg,var(--bg-1),var(--bg-0));
+  border:1px solid var(--line);border-radius:20px;padding:22px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.modal-box h3{margin:0 0 16px;font-family:'Bricolage Grotesque';font-weight:800;font-size:22px;color:var(--gold)}
+.suit-choices{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.suit-choice{border-radius:14px;border:1px solid var(--line);background:var(--cream);
+  font-size:34px;padding:14px 0;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
+.suit-choice small{font-size:12px;color:var(--ink);font-family:'Inter';font-weight:600}
+.suit-choice.red{color:var(--red)} .suit-choice.dark{color:var(--ink)}
+.vote-status{color:var(--muted);font-size:14px;margin-bottom:14px;line-height:1.6}
+.vote-buttons{display:flex;gap:10px}.vote-buttons .btn{margin-top:0}
+.score-list{list-style:none;padding:0;margin:0 0 14px;display:flex;flex-direction:column;gap:8px;text-align:left}
+.score-list li{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.05);
+  border:1px solid var(--line);border-radius:12px;padding:11px 14px}
+.score-list .sname{font-weight:700}
+.score-list .sdelta{margin-left:auto;font-size:13px;color:var(--muted)}
+.score-list .stotal{font-weight:800;color:var(--gold);min-width:38px;text-align:right}
+.score-list li.elim{opacity:.5}
+.score-list li.win{border-color:var(--turq);box-shadow:0 0 0 1px var(--turq-dim)}
 
-/* ----------------------------------------------------------------------- *
- *  YORDAMCHI FUNKSIYALAR
- * ----------------------------------------------------------------------- */
-function nameOf(room, id) { const p = findPlayer(room, id); return p ? p.name : '???'; }
-function currentId(room) { return room.st.order[room.st.pos]; }
-function advance(room, steps) {
-  const st = room.st;
-  const n = st.order.length;
-  let pos = st.pos;
-  let moved = 0;
-  // faqat taslim bo'lmagan o'yinchilarga o'tamiz
-  while (moved < steps) {
-    pos = (pos + 1) % n;
-    const p = findPlayer(room, st.order[pos]);
-    if (p && !p.foldedThisRound) moved++;
-    if (allFoldedButOne(room)) break;
-  }
-  st.pos = pos;
-}
-function inRoundPlayers(room) {
-  return room.st.order.map(id => findPlayer(room, id)).filter(p => p && !p.foldedThisRound);
-}
-function allFoldedButOne(room) { return inRoundPlayers(room).length <= 1; }
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:80;
+  background:var(--ink);color:var(--cream);padding:12px 18px;border-radius:12px;font-size:14px;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);max-width:88%;text-align:center;animation:fade .2s}
 
-// Ushbu karta hozir tashlansa bo'ladimi?
-function canPlay(st, card) {
-  if (st.awaitingLead) return true; // boshlovchi istalganini tashlaydi
-  if (st.pendingDraw > 0) {
-    if (st.pendingType === '6') return card.rank === '6';
-    if (st.pendingType === '7') return card.rank === '7';
-    if (st.pendingType === 'K') return false; // K qargaga qarshi yo'q — 4 ta olish shart
-  }
-  if (card.rank === 'Q') return true;                 // joker
-  if (card.suit === st.currentSuit) return true;      // mast mos
-  if (card.rank === st.currentRank) return true;      // raqam mos
-  return false;
-}
-function legalMoves(st, hand) { return hand.filter(c => canPlay(st, c)).map(c => c.id); }
+@media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important}}
 
-function reshuffleIfNeeded(st) {
-  if (st.drawPile.length === 0 && st.discard.length > 1) {
-    const top = st.discard.pop();
-    st.drawPile = shuffle(st.discard);
-    st.discard = [top];
-  }
-}
-function drawN(room, player, n) {
-  const st = room.st;
-  let got = 0;
-  for (let i = 0; i < n; i++) {
-    reshuffleIfNeeded(st);
-    if (st.drawPile.length === 0) break;
-    player.hand.push(st.drawPile.pop());
-    got++;
-  }
-  return got;
-}
+/* ================= CHAT ================= */
+.actions-2{margin-top:8px}
+.btn-sm{padding:10px 8px;font-size:13px}
 
-function cardText(c) {
-  const sym = { qarga: '♠', gisht: '♦', chirva: '♥', xoch: '♣' };
-  return c.rank + sym[c.suit];
-}
+.chat-fab{position:fixed;right:14px;bottom:calc(env(safe-area-inset-bottom) + 90px);z-index:40;
+  width:52px;height:52px;border-radius:50%;border:1px solid var(--line);cursor:pointer;
+  background:linear-gradient(180deg,var(--gold),var(--gold-dim));color:#26190a;font-size:22px;
+  box-shadow:0 8px 22px rgba(0,0,0,.4)}
+.chat-dot{position:absolute;top:2px;right:4px;width:12px;height:12px;border-radius:50%;
+  background:var(--red);border:2px solid var(--bg-0)}
 
-/* ----------------------------------------------------------------------- *
- *  KARTA TASHLASH / OLISH / TASLIM
- * ----------------------------------------------------------------------- */
-function applyEffect(room, card, declaredSuit) {
-  const st = room.st;
-  st.currentRank = card.rank;
-  if (card.rank === 'Q') {
-    st.currentSuit = SUITS.includes(declaredSuit) ? declaredSuit : card.suit;
-    addLog(room, `${nameOf(room, currentId(room))}: Q → mast "${st.currentSuit}"`);
-  } else {
-    st.currentSuit = card.suit;
-  }
-  switch (card.rank) {
-    case '6': st.pendingDraw += 2; st.pendingType = '6'; advance(room, 1); break;
-    case '7': st.pendingDraw += 1; st.pendingType = '7'; advance(room, 1); break;
-    case '8': /* qo'shimcha xod: navbat o'zida qoladi */ break;
-    case 'A': advance(room, 2); break; // keyingi sakraladi (2 kishida o'ziga qaytadi)
-    case 'K':
-      if (card.suit === 'qarga') { st.pendingDraw += 4; st.pendingType = 'K'; }
-      advance(room, 1);
-      break;
-    case 'Q': advance(room, 1); break;
-    default: advance(room, 1);
-  }
-}
+.chat-panel{position:fixed;inset:auto 0 0 0;z-index:60;max-width:560px;margin:0 auto;height:72dvh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,var(--bg-1),var(--bg-0));
+  border-top:1px solid var(--line);border-radius:20px 20px 0 0;box-shadow:0 -14px 44px rgba(0,0,0,.5);
+  padding-bottom:env(safe-area-inset-bottom);animation:slideUp .22s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:none}}
+.chat-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+.chat-head strong{font-family:'Bricolage Grotesque';font-size:18px;color:var(--gold)}
+.chat-body{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
 
-function handlePlay(room, player, cardId, declaredSuit) {
-  const st = room.st;
-  if (room.phase !== 'playing') return err(player, 'O\'yin hozir faol emas.');
-  if (room.pendingVote) return err(player, 'Ovoz berish tugashini kuting.');
-  if (currentId(room) !== player.id) return err(player, 'Sizning navbatingiz emas.');
-  if (player.foldedThisRound) return err(player, 'Siz bu raundda taslim bo\'lgansiz.');
-  const idx = player.hand.findIndex(c => c.id === cardId);
-  if (idx < 0) return err(player, 'Bunday karta qo\'lingizda yo\'q.');
-  const card = player.hand[idx];
-  if (!canPlay(st, card)) return err(player, 'Bu kartani hozir tashlab bo\'lmaydi.');
-  if (card.rank === 'Q' && !SUITS.includes(declaredSuit)) return err(player, 'Q uchun mast tanlang.');
+.bubble{max-width:78%;padding:9px 12px;border-radius:14px;font-size:14px;line-height:1.45;
+  background:rgba(255,255,255,.07);border:1px solid var(--line);align-self:flex-start;word-break:break-word}
+.bubble.me{align-self:flex-end;background:rgba(231,178,76,.16);border-color:rgba(231,178,76,.4)}
+.bubble .who{display:block;font-size:11px;color:var(--gold);font-weight:700;margin-bottom:3px}
+.bubble.me .who{display:none}
+.bubble img{max-width:200px;border-radius:10px;display:block;cursor:pointer;margin-top:2px}
+.bubble audio{width:190px;height:34px;margin-top:2px}
 
-  player.hand.splice(idx, 1);
-  st.discard.push(card);
-  st.awaitingLead = false;
-  addLog(room, `${player.name}: ${cardText(card)}`);
+.chat-input{display:flex;align-items:center;gap:6px;padding:10px 12px;border-top:1px solid var(--line)}
+.chat-input input{flex:1;padding:11px 14px;border-radius:20px;border:1px solid var(--line);
+  background:rgba(0,0,0,.28);color:var(--txt);font:400 15px 'Inter'}
+.chat-input input:focus{outline:1px solid var(--turq-dim)}
+.icon-btn{width:40px;height:40px;flex:0 0 auto;border-radius:50%;border:1px solid var(--line);
+  background:rgba(255,255,255,.06);color:var(--txt);font-size:17px;cursor:pointer;display:grid;place-items:center}
+.icon-btn.send{background:linear-gradient(180deg,var(--gold),var(--gold-dim));color:#26190a;border:0;font-size:16px}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn.rec{background:var(--red);color:#fff;border:0}
 
-  // Qo'l tugadi — raund yakuni (g'olib)
-  if (player.hand.length === 0) {
-    endRound(room, player.id, card);
-    return;
-  }
-  applyEffect(room, card, declaredSuit);
-  broadcastState(room);
-}
+.rec-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);
+  background:rgba(200,65,43,.12);font-size:14px;font-weight:600}
+.rec-dot{width:10px;height:10px;border-radius:50%;background:var(--red);animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.25}}
+.rec-bar .btn-mini{margin-left:auto}
+.rec-bar .btn-mini + .btn-mini{margin-left:0}
 
-function handleDraw(room, player) {
-  const st = room.st;
-  if (room.phase !== 'playing') return err(player, 'O\'yin hozir faol emas.');
-  if (room.pendingVote) return err(player, 'Ovoz berish tugashini kuting.');
-  if (currentId(room) !== player.id) return err(player, 'Sizning navbatingiz emas.');
-  if (player.foldedThisRound) return err(player, 'Siz bu raundda taslim bo\'lgansiz.');
-  if (st.awaitingLead) return err(player, 'Boshlash uchun karta tashlashingiz kerak.');
-
-  if (st.pendingDraw > 0) {
-    const n = st.pendingDraw;
-    const got = drawN(room, player, n);
-    addLog(room, `${player.name} ${got} karta oldi (jazo).`);
-    st.pendingDraw = 0; st.pendingType = null;
-    advance(room, 1);
-  } else {
-    const got = drawN(room, player, 1);
-    addLog(room, got ? `${player.name} 1 karta oldi.` : `${player.name}: talada karta yo'q.`);
-    advance(room, 1);
-  }
-  broadcastState(room);
-}
-
-function handleFold(room, player) {
-  if (room.phase !== 'playing') return err(player, 'Hozir taslim bo\'lib bo\'lmaydi.');
-  if (room.pendingVote) return err(player, 'Ovoz berish tugashini kuting.');
-  if (player.foldedThisRound) return err(player, 'Siz allaqachon taslim bo\'lgansiz.');
-  player.foldedThisRound = true;
-  addLog(room, `${player.name} taslim bo'ldi (sdatsya).`);
-
-  // Faqat bitta o'yinchi qolsa — u g'olib
-  const left = inRoundPlayers(room);
-  if (left.length === 1) {
-    endRound(room, left[0].id, null);
-    return;
-  }
-  // Agar taslim bo'lgan o'yinchi navbatda edi — navbatni suramiz
-  if (currentId(room) === player.id) advance(room, 1);
-  broadcastState(room);
-}
-
-/* ----------------------------------------------------------------------- *
- *  RAUND YAKUNI VA OCHKO
- * ----------------------------------------------------------------------- */
-function endRound(room, winnerId, lastCard) {
-  const parts = activePlayers(room);
-  for (const p of parts) {
-    if (p.id === winnerId) {
-      const delta = (lastCard && lastCard.rank === 'K' && lastCard.suit === 'qarga') ? -80 : 0;
-      p.cumulative += delta;
-      p.roundDelta = delta;
-    } else {
-      const s = handScore(p.hand);
-      p.cumulative += s;
-      p.roundDelta = s;
-    }
-  }
-  // 108 ga teng bo'lsa 0 ga qaytadi; 108 dan oshsa chiqib ketadi
-  for (const p of parts) {
-    if (p.cumulative === LOSE_LIMIT) p.cumulative = 0;
-    else if (p.cumulative > LOSE_LIMIT) p.eliminated = true;
-  }
-  room.lastWinnerId = winnerId;
-  addLog(room, `Raund yakuni. G'olib: ${nameOf(room, winnerId)}.`);
-
-  const remaining = activePlayers(room);
-  if (remaining.length <= 1) {
-    room.phase = 'gameover';
-    let champ = remaining[0];
-    if (!champ) champ = parts.slice().sort((a, b) => a.cumulative - b.cumulative)[0]; // hammasi chiqsa: eng kam ochkoli
-    room.champId = champ ? champ.id : null;
-    broadcastRoundOrOver(room);
-  } else {
-    room.phase = 'roundover';
-    broadcastRoundOrOver(room);
-  }
-}
-
-/* ----------------------------------------------------------------------- *
- *  QAYTA BOSHLASH TAKLIFI (OVOZ BERISH)
- * ----------------------------------------------------------------------- */
-function handlePropose(room, player) {
-  if (room.pendingVote) return err(player, 'Allaqachon ovoz berish bormoqda.');
-  if (player.usedProposal) return err(player, 'Taklifni faqat bir marta yuborasiz.');
-  const voters = room.players.filter(p => p.connected && p.id !== player.id);
-  if (voters.length === 0) return err(player, 'Ovoz beruvchi yo\'q.');
-  player.usedProposal = true;
-  room.pendingVote = { proposerId: player.id, votes: {} };
-  addLog(room, `${player.name} o'yinni qaytadan boshlashni taklif qildi.`);
-  broadcastState(room);
-}
-
-function handleVote(room, player, yes) {
-  const v = room.pendingVote;
-  if (!v) return;
-  if (player.id === v.proposerId) return; // taklif qiluvchi avtomatik "ha"
-  v.votes[player.id] = yes ? 'yes' : 'no';
-
-  const voters = room.players.filter(p => p.connected && p.id !== v.proposerId);
-  const allVoted = voters.every(p => v.votes[p.id]);
-  if (!allVoted) { broadcastState(room); return; }
-
-  const allYes = voters.every(p => v.votes[p.id] === 'yes');
-  room.pendingVote = null;
-  if (allYes) {
-    addLog(room, 'Hamma rozi — o\'yin qaytadan boshlanmoqda!');
-    restartGame(room);
-  } else {
-    addLog(room, 'Taklif rad etildi. O\'yin davom etadi.');
-    broadcastState(room);
-  }
-}
-
-function restartGame(room) {
-  room.roundNumber = 0;
-  room.lastWinnerId = null;
-  room.champId = null;
-  room.players.forEach(p => {
-    p.cumulative = 0; p.eliminated = false; p.foldedThisRound = false;
-    p.usedProposal = false; p.roundDelta = 0; p.hand = [];
-  });
-  startRound(room);
-  broadcastState(room);
-}
-
-/* ----------------------------------------------------------------------- *
- *  HOLATNI YUBORISH (har o'yinchiga moslashtirilgan)
- * ----------------------------------------------------------------------- */
-function publicPlayer(room, p) {
-  return {
-    id: p.id,
-    name: p.name,
-    count: p.hand ? p.hand.length : 0,
-    cumulative: p.cumulative,
-    eliminated: p.eliminated,
-    folded: p.foldedThisRound,
-    connected: p.connected,
-    isHost: p.id === room.hostId,
-    isCurrent: room.phase === 'playing' && room.st && currentId(room) === p.id,
-  };
-}
-
-function stateFor(room, me) {
-  const st = room.st;
-  const base = {
-    t: 'state',
-    code: room.code,
-    phase: room.phase,
-    roundNumber: room.roundNumber,
-    youId: me.id,
-    isHost: me.id === room.hostId,
-    players: room.players.map(p => publicPlayer(room, p)),
-    log: room.log.slice(),
-    limit: LOSE_LIMIT,
-    canPropose: !me.usedProposal && !room.pendingVote,
-    pendingVote: room.pendingVote ? {
-      proposerId: room.pendingVote.proposerId,
-      proposerName: nameOf(room, room.pendingVote.proposerId),
-      youNeedToVote: room.pendingVote.proposerId !== me.id && !room.pendingVote.votes[me.id] && me.connected,
-      votes: room.pendingVote.votes,
-    } : null,
-  };
-  if (room.phase === 'playing' && st) {
-    base.top = st.discard[st.discard.length - 1] || null;
-    base.currentSuit = st.currentSuit;
-    base.currentRank = st.currentRank;
-    base.pendingDraw = st.pendingDraw;
-    base.pendingType = st.pendingType;
-    base.drawCount = st.drawPile.length;
-    base.awaitingLead = st.awaitingLead;
-    base.currentPlayerId = currentId(room);
-    base.yourTurn = currentId(room) === me.id && !me.foldedThisRound;
-    base.you = { hand: me.hand || [] };
-    base.youFolded = me.foldedThisRound;
-    base.legal = base.yourTurn ? legalMoves(st, me.hand) : [];
-  }
-  if (room.phase === 'roundover' || room.phase === 'gameover') {
-    base.scores = room.players.map(p => ({
-      id: p.id, name: p.name, cumulative: p.cumulative,
-      roundDelta: p.roundDelta, eliminated: p.eliminated,
-    }));
-    base.winnerName = nameOf(room, room.lastWinnerId);
-  }
-  if (room.phase === 'gameover') base.champName = room.champId ? nameOf(room, room.champId) : '—';
-  return base;
-}
-
-function send(p, obj) { try { if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(obj)); } catch (_) {} }
-function err(p, msg) { send(p, { t: 'error', msg }); }
-function broadcastState(room) { for (const p of room.players) send(p, stateFor(room, p)); }
-function broadcastRoundOrOver(room) { broadcastState(room); }
-function broadcastLobby(room) {
-  for (const p of room.players) {
-    send(p, {
-      t: 'lobby', code: room.code, youId: p.id, isHost: p.id === room.hostId,
-      players: room.players.map(x => ({ id: x.id, name: x.name, isHost: x.id === room.hostId, connected: x.connected })),
-    });
-  }
-}
-
-/* ----------------------------------------------------------------------- *
- *  WEBSOCKET ULANISH
- * ----------------------------------------------------------------------- */
-wss.on('connection', (ws) => {
-  ws.meta = { roomCode: null, playerId: null };
-
-  ws.on('message', (raw) => {
-    let m; try { m = JSON.parse(raw); } catch { return; }
-    handleMessage(ws, m);
-  });
-
-  ws.on('close', () => {
-    const { roomCode, playerId } = ws.meta;
-    const room = rooms.get(roomCode);
-    if (!room) return;
-    const p = findPlayer(room, playerId);
-    if (p) { p.connected = false; p.ws = null; }
-    // agar hech kim ulanmagan bo'lsa — biroz kutib xonani tozalaymiz
-    if (room.players.every(x => !x.connected)) {
-      setTimeout(() => {
-        const r = rooms.get(roomCode);
-        if (r && r.players.every(x => !x.connected)) rooms.delete(roomCode);
-      }, 1000 * 60 * 10);
-    } else if (room.phase === 'lobby') {
-      broadcastLobby(room);
-    } else {
-      broadcastState(room);
-    }
-  });
-});
-
-function handleMessage(ws, m) {
-  switch (m.t) {
-    case 'hello': return onHello(ws, m);
-    case 'create': return onCreate(ws, m);
-    case 'join': return onJoin(ws, m);
-    case 'start': return onStart(ws);
-    case 'next': return onNext(ws);
-    case 'play': return withRoom(ws, (room, p) => handlePlay(room, p, m.cardId, m.suit));
-    case 'draw': return withRoom(ws, (room, p) => handleDraw(room, p));
-    case 'fold': return withRoom(ws, (room, p) => handleFold(room, p));
-    case 'propose': return withRoom(ws, (room, p) => handlePropose(room, p));
-    case 'vote': return withRoom(ws, (room, p) => handleVote(room, p, !!m.yes));
-    case 'leave': return onLeave(ws);
-  }
-}
-
-function withRoom(ws, fn) {
-  const room = rooms.get(ws.meta.roomCode);
-  if (!room) return;
-  const p = findPlayer(room, ws.meta.playerId);
-  if (!p) return;
-  fn(room, p);
-}
-
-// Qayta ulanish: tgId bo'yicha o'yinchini topib, ws'ni yangilaymiz
-function onHello(ws, m) {
-  const id = String(m.tgId || '');
-  const code = m.roomCode ? String(m.roomCode) : null;
-  if (code && rooms.has(code)) {
-    const room = rooms.get(code);
-    const p = findPlayer(room, id);
-    if (p) {
-      p.ws = ws; p.connected = true; if (m.name) p.name = m.name;
-      ws.meta = { roomCode: code, playerId: id };
-      if (room.phase === 'lobby') broadcastLobby(room); else broadcastState(room);
-      return;
-    }
-  }
-  send({ ws }, { t: 'ready' }); // yangi o'yinchi — menyuni ko'rsatadi (mijoz o'zi hal qiladi)
-  try { ws.send(JSON.stringify({ t: 'ready' })); } catch (_) {}
-}
-
-function onCreate(ws, m) {
-  const id = String(m.tgId || rndId());
-  const name = (m.name || 'O\'yinchi').slice(0, 16);
-  const room = createRoom(id);
-  const player = newPlayer(id, name, ws);
-  room.players.push(player);
-  ws.meta = { roomCode: room.code, playerId: id };
-  broadcastLobby(room);
-}
-
-function onJoin(ws, m) {
-  const code = String(m.code || '');
-  const room = rooms.get(code);
-  if (!room) { try { ws.send(JSON.stringify({ t: 'error', msg: 'Bunday xona topilmadi.' })); } catch (_) {} return; }
-  if (room.phase !== 'lobby') { try { ws.send(JSON.stringify({ t: 'error', msg: 'O\'yin allaqachon boshlangan.' })); } catch (_) {} return; }
-  if (room.players.length >= 6) { try { ws.send(JSON.stringify({ t: 'error', msg: 'Xona to\'la (6 o\'yinchi).' })); } catch (_) {} return; }
-  const id = String(m.tgId || rndId());
-  const name = (m.name || 'O\'yinchi').slice(0, 16);
-  let p = findPlayer(room, id);
-  if (p) { p.ws = ws; p.connected = true; p.name = name; }
-  else { p = newPlayer(id, name, ws); room.players.push(p); }
-  ws.meta = { roomCode: room.code, playerId: id };
-  broadcastLobby(room);
-}
-
-function onStart(ws) {
-  const room = rooms.get(ws.meta.roomCode);
-  if (!room) return;
-  if (ws.meta.playerId !== room.hostId) return err(findPlayer(room, ws.meta.playerId), 'Faqat xona egasi boshlaydi.');
-  if (room.players.length < 2) return err(findPlayer(room, ws.meta.playerId), 'Kamida 2 o\'yinchi kerak.');
-  startRound(room);
-  broadcastState(room);
-}
-
-function onNext(ws) {
-  const room = rooms.get(ws.meta.roomCode);
-  if (!room || room.phase !== 'roundover') return;
-  if (ws.meta.playerId !== room.hostId) return err(findPlayer(room, ws.meta.playerId), 'Keyingi raundni xona egasi boshlaydi.');
-  startRound(room);
-  broadcastState(room);
-}
-
-function onLeave(ws) {
-  const room = rooms.get(ws.meta.roomCode);
-  if (!room) return;
-  const p = findPlayer(room, ws.meta.playerId);
-  if (p) { p.connected = false; p.ws = null; }
-  ws.meta = { roomCode: null, playerId: null };
-  if (room.phase === 'lobby') broadcastLobby(room); else broadcastState(room);
-}
-
-function newPlayer(id, name, ws) {
-  return {
-    id, name, ws, connected: true,
-    hand: [], cumulative: 0, eliminated: false,
-    foldedThisRound: false, usedProposal: false, roundDelta: 0,
-  };
-}
-function rndId() { return 'g' + Math.random().toString(36).slice(2, 10); }
+#imgModal img{max-width:94vw;max-height:88dvh;border-radius:12px}
