@@ -32,8 +32,9 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function onMessage(m) {
   switch (m.t) {
     case 'ready': roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); break;
-    case 'lobby': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderLobby(m); break;
-    case 'state': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderState(m); break;
+    case 'lobby': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); loadChat(m.chat); renderLobby(m); break;
+    case 'state': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); loadChat(m.chat); renderState(m); break;
+    case 'chat': addChat(m.msg); break;
     case 'error': toast(m.msg); break;
   }
 }
@@ -123,7 +124,8 @@ function renderState(m) {
   $('drawBtn').disabled = !m.yourTurn || m.awaitingLead;
   $('drawBtn').textContent = m.pendingDraw > 0 && m.yourTurn ? `${m.pendingDraw} karta olish` : 'Karta olish';
   $('foldBtn').disabled = m.youFolded || m.phase !== 'playing';
-  $('proposeBtn').disabled = !m.canPropose;
+  $('restartBtn').disabled = !m.canRestart;
+  $('endBtn').disabled = !m.canEnd;
 
   // Jurnal
   $('log').innerHTML = (m.log || []).map(l => `<div>${esc(l)}</div>`).join('');
@@ -137,13 +139,18 @@ function renderVote(m) {
   const v = m.pendingVote;
   if (!v) { hide($('voteModal')); return; }
   show($('voteModal'));
-  $('voteText').textContent = `${v.proposerName} o'yinni qaytadan boshlashni taklif qilyapti`;
+  $('voteText').textContent = v.kind === 'end'
+    ? `${v.proposerName} o'yinni YAKUNLASHNI taklif qilyapti`
+    : `${v.proposerName} o'yinni QAYTADAN BOSHLASHNI taklif qilyapti`;
   const others = m.players.filter(p => p.id !== v.proposerId);
   const lines = others.map(p => {
     const val = v.votes[p.id];
     return `${esc(p.name)}: ${val === 'yes' ? '✅ rozi' : val === 'no' ? '❌ yo\'q' : '… kutilmoqda'}`;
   });
-  $('voteStatus').innerHTML = lines.join('<br>') + '<br><small>Hamma rozi bo\'lsagina qaytadan boshlanadi.</small>';
+  const note = v.kind === 'end'
+    ? "Hamma rozi bo'lsagina o'yin yakunlanadi (eng kam ochkoli g'olib)."
+    : "Hamma rozi bo'lsagina o'yin noldan boshlanadi.";
+  $('voteStatus').innerHTML = lines.join('<br>') + '<br><small>' + note + '</small>';
   $('voteButtons').classList.toggle('hidden', !v.youNeedToVote);
 }
 
@@ -152,7 +159,7 @@ function renderResult(m) {
   show($('resultModal'));
   const over = m.phase === 'gameover';
   $('resultTitle').textContent = over
-    ? `🏆 G'olib: ${m.champName}`
+    ? (m.endedEarly ? `🏁 O'yin yakunlandi — g'olib: ${m.champName}` : `🏆 G'olib: ${m.champName}`)
     : `${m.roundNumber}-raund tugadi — ${m.winnerName} yutdi`;
   const ul = $('scoreList'); ul.innerHTML = '';
   m.scores.slice().sort((a, b) => a.cumulative - b.cumulative).forEach(s => {
@@ -184,9 +191,11 @@ function playCard(c) {
   if (c.rank === 'Q') { pendingCardId = c.id; show($('suitModal')); return; }
   send({ t: 'play', cardId: c.id });
 }
+$('startBtn').onclick = () => { haptic(); send({ t: 'start' }); };
 $('drawBtn').onclick = () => { haptic(); send({ t: 'draw' }); };
 $('foldBtn').onclick = () => { if (confirm('Rostdan taslim bo\'lasizmi? Qo\'lingizdagi kartalar ochko sifatida qo\'shiladi.')) send({ t: 'fold' }); };
-$('proposeBtn').onclick = () => { if (confirm('O\'yinni qaytadan boshlashni taklif qilasizmi? (bir marta)')) send({ t: 'propose' }); };
+$('restartBtn').onclick = () => { if (confirm('O\'yinni qaytadan boshlashni taklif qilasizmi? Hamma rozi bo\'lsa ochkolar nolga qaytadi. (bir marta)')) send({ t: 'propose', kind: 'restart' }); };
+$('endBtn').onclick = () => { if (confirm('O\'yinni yakunlashni taklif qilasizmi? Hamma rozi bo\'lsa o\'yin tugaydi, eng kam ochkoli g\'olib bo\'ladi. (bir marta)')) send({ t: 'propose', kind: 'end' }); };
 $('voteYes').onclick = () => send({ t: 'vote', yes: true });
 $('voteNo').onclick = () => send({ t: 'vote', yes: false });
 $('nextRoundBtn').onclick = () => send({ t: 'next' });
@@ -225,6 +234,143 @@ function toast(msg) {
 }
 function haptic() { try { tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred('light'); } catch (_) {} }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ---------------------------------------------------------------- *
+ *  CHAT — matn, rasm, ovozli xabar
+ * ---------------------------------------------------------------- */
+const seenChat = new Set();
+let chatOpen = false;
+
+function chatVisible() { return !$('chatPanel').classList.contains('hidden'); }
+
+function openChat() {
+  show($('chatPanel')); hide($('chatDot')); chatOpen = true;
+  $('chatBody').scrollTop = $('chatBody').scrollHeight;
+}
+function closeChat() { hide($('chatPanel')); chatOpen = false; }
+
+$('chatFab').onclick = () => chatVisible() ? closeChat() : openChat();
+$('chatClose').onclick = closeChat;
+$('lobbyChatBtn').onclick = openChat;
+
+function loadChat(list) {
+  show($('chatFab'));
+  if (!Array.isArray(list)) return;
+  list.forEach(msg => addChat(msg, true));
+}
+
+function addChat(msg, silent) {
+  if (!msg || seenChat.has(msg.id)) return;
+  seenChat.add(msg.id);
+
+  const b = document.createElement('div');
+  const mine = msg.from === myId;
+  b.className = 'bubble' + (mine ? ' me' : '');
+
+  let inner = mine ? '' : `<span class="who">${esc(msg.name)}</span>`;
+  if (msg.kind === 'text') {
+    inner += esc(msg.data);
+  } else if (msg.kind === 'image') {
+    inner += `<img src="${msg.data}" alt="rasm" />`;
+  } else if (msg.kind === 'voice') {
+    inner += `<audio controls preload="metadata" src="${msg.data}"></audio>`;
+  }
+  b.innerHTML = inner;
+
+  const img = b.querySelector('img');
+  if (img) img.onclick = () => { $('imgBig').src = msg.data; show($('imgModal')); };
+
+  const body = $('chatBody');
+  body.appendChild(b);
+  body.scrollTop = body.scrollHeight;
+
+  if (!silent && !chatVisible() && !mine) { show($('chatDot')); haptic(); }
+}
+
+$('imgModal').onclick = () => hide($('imgModal'));
+
+/* --- Matn yuborish --- */
+function sendText() {
+  const v = $('chatText').value.trim();
+  if (!v) return;
+  send({ t: 'chat', kind: 'text', data: v });
+  $('chatText').value = '';
+}
+$('chatSend').onclick = sendText;
+$('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
+
+/* --- Rasm yuborish (kichraytirib) --- */
+$('imgBtn').onclick = () => $('imgInput').click();
+$('imgInput').onchange = e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (!f.type.startsWith('image/')) return toast('Bu rasm emas.');
+  const reader = new FileReader();
+  reader.onload = () => {
+    const im = new Image();
+    im.onload = () => {
+      const MAX = 900;
+      let { width: w, height: h } = im;
+      if (w > MAX || h > MAX) { const k = MAX / Math.max(w, h); w = Math.round(w * k); h = Math.round(h * k); }
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(im, 0, 0, w, h);
+      const data = cv.toDataURL('image/jpeg', 0.72);
+      if (data.length > 2.4 * 1024 * 1024) return toast('Rasm juda katta.');
+      send({ t: 'chat', kind: 'image', data });
+      if (!chatVisible()) openChat();
+    };
+    im.onerror = () => toast('Rasmni o\'qib bo\'lmadi.');
+    im.src = reader.result;
+  };
+  reader.readAsDataURL(f);
+};
+
+/* --- Ovozli xabar --- */
+let rec = null, recChunks = [], recTimer = null, recStart = 0;
+
+$('micBtn').onclick = async () => {
+  if (rec) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast('Qurilma ovoz yozishni qo\'llamaydi.');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+    rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    recChunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      clearInterval(recTimer);
+      hide($('recBar'));
+      $('micBtn').classList.remove('rec');
+      const cancelled = rec && rec._cancelled;
+      const dur = Math.round((Date.now() - recStart) / 1000);
+      rec = null;
+      if (cancelled || !recChunks.length) return;
+      const blob = new Blob(recChunks, { type: recChunks[0].type || 'audio/webm' });
+      if (blob.size > 1.8 * 1024 * 1024) return toast('Ovoz juda uzun.');
+      const fr = new FileReader();
+      fr.onload = () => { send({ t: 'chat', kind: 'voice', data: fr.result, dur }); if (!chatVisible()) openChat(); };
+      fr.readAsDataURL(blob);
+    };
+    rec.start();
+    recStart = Date.now();
+    $('micBtn').classList.add('rec');
+    show($('recBar'));
+    if (!chatVisible()) openChat();
+    recTimer = setInterval(() => {
+      const s = Math.round((Date.now() - recStart) / 1000);
+      $('recTime').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+      if (s >= 60) $('recStop').click(); // maksimum 60 soniya
+    }, 250);
+  } catch (err) {
+    toast('Mikrofonga ruxsat berilmadi.');
+  }
+};
+$('recStop').onclick = () => { if (rec && rec.state !== 'inactive') { rec._cancelled = false; rec.stop(); } };
+$('recCancel').onclick = () => { if (rec && rec.state !== 'inactive') { rec._cancelled = true; rec.stop(); } };
 
 /* ---------- Ishga tushirish ---------- */
 screenMenu();
