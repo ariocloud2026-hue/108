@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2" />
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
   <div id="app">
@@ -47,6 +47,7 @@
       <ul id="lobbyPlayers" class="players-list"></ul>
       <button id="startBtn" class="btn btn-primary hidden">O'yinni boshlash</button>
       <p id="lobbyHint" class="hint">Xona egasi 2–6 kishi yig'ilgach boshlaydi.</p>
+      <button id="lobbyChatBtn" class="btn btn-ghost">💬 Chat</button>
       <button id="leaveLobbyBtn" class="btn btn-text">Chiqish</button>
     </section>
 
@@ -76,7 +77,10 @@
         <div class="actions">
           <button id="drawBtn" class="btn btn-primary">Karta olish</button>
           <button id="foldBtn" class="btn btn-warn">Taslim</button>
-          <button id="proposeBtn" class="btn btn-ghost">Qayta boshlash taklifi</button>
+        </div>
+        <div class="actions actions-2">
+          <button id="restartBtn" class="btn btn-ghost btn-sm">🔄 Qayta boshlash</button>
+          <button id="endBtn" class="btn btn-ghost btn-sm">🏁 Yakunlash</button>
         </div>
       </div>
 
@@ -121,8 +125,36 @@
     </div>
   </div>
 
+  <!-- Suzuvchi chat tugmasi -->
+  <button id="chatFab" class="chat-fab hidden">💬<span id="chatDot" class="chat-dot hidden"></span></button>
+
+  <!-- Chat paneli -->
+  <div id="chatPanel" class="chat-panel hidden">
+    <div class="chat-head">
+      <strong>Chat</strong>
+      <button id="chatClose" class="btn btn-mini">Yopish</button>
+    </div>
+    <div id="chatBody" class="chat-body"></div>
+    <div id="recBar" class="rec-bar hidden">
+      <span class="rec-dot"></span>
+      <span id="recTime">0:00</span>
+      <button id="recStop" class="btn btn-mini">Yuborish</button>
+      <button id="recCancel" class="btn btn-mini">Bekor</button>
+    </div>
+    <div class="chat-input">
+      <button id="imgBtn" class="icon-btn" title="Rasm">🖼</button>
+      <button id="micBtn" class="icon-btn" title="Ovoz">🎤</button>
+      <input id="chatText" type="text" maxlength="400" placeholder="Xabar yozing…" />
+      <button id="chatSend" class="icon-btn send">➤</button>
+    </div>
+    <input id="imgInput" type="file" accept="image/*" class="hidden" />
+  </div>
+
+  <!-- Rasmni kattalashtirib ko'rish -->
+  <div id="imgModal" class="modal hidden"><img id="imgBig" alt="" /></div>
+
   <div id="toast" class="toast hidden"></div>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
