@@ -203,3 +203,52 @@ body{
 .rec-bar .btn-mini + .btn-mini{margin-left:0}
 
 #imgModal img{max-width:94vw;max-height:88dvh;border-radius:12px}
+
+/* ================= QO'NG'IROQ / TARIX / QO'LLANMA ================= */
+.row-btns{display:flex;gap:8px}
+.row-btns .btn{margin-top:4px}
+
+.fabs{position:fixed;right:14px;bottom:calc(env(safe-area-inset-bottom) + 90px);z-index:40;
+  display:flex;flex-direction:column;gap:10px}
+.fab{position:relative;width:52px;height:52px;border-radius:50%;border:1px solid var(--line);cursor:pointer;
+  background:linear-gradient(180deg,var(--gold),var(--gold-dim));color:#26190a;font-size:21px;
+  box-shadow:0 8px 22px rgba(0,0,0,.4);display:grid;place-items:center}
+.fab.call{background:linear-gradient(180deg,var(--turq),var(--turq-dim));color:#052b28}
+.fab.call.live{background:linear-gradient(180deg,#5ee07a,#2f9c53);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 8px 22px rgba(0,0,0,.4)}50%{box-shadow:0 0 0 8px rgba(94,224,122,.18)}}
+.fab:active{transform:scale(.94)}
+
+/* Qo'ng'iroq video lentasi */
+.call-strip{display:flex;gap:6px;overflow-x:auto;padding:6px 2px 8px;margin-bottom:2px}
+.call-tile{position:relative;flex:0 0 auto;width:78px;height:78px;border-radius:12px;overflow:hidden;
+  background:#0b2b2f;border:1px solid var(--line)}
+.call-tile.speaking{border-color:var(--turq);box-shadow:0 0 0 2px var(--turq-dim)}
+.call-tile video{width:100%;height:100%;object-fit:cover;display:block;background:#0b2b2f}
+.call-tile .cname{position:absolute;bottom:0;left:0;right:0;font-size:10px;text-align:center;
+  background:rgba(0,0,0,.55);padding:2px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.call-tile .avatar{position:absolute;inset:0;display:grid;place-items:center;font-size:26px;color:var(--gold)}
+.call-controls{display:flex;gap:8px;margin-bottom:8px}
+.call-controls .btn{margin-top:0}
+.btn-ghost.off{opacity:.45}
+
+/* Kartalar ketma-ketligi */
+.history-wrap{display:flex;align-items:center;gap:8px;padding:2px 4px 0}
+.history-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;flex:0 0 auto}
+.history{display:flex;gap:4px;overflow-x:auto;padding:4px 0;flex:1}
+.hcard{flex:0 0 auto;min-width:30px;height:38px;border-radius:6px;background:var(--cream);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Bricolage Grotesque';
+  font-weight:800;font-size:12px;line-height:1.05;border:1px solid #d8cba7;padding:0 3px}
+.hcard.red{color:var(--red)} .hcard.dark{color:var(--ink)}
+.hcard small{font-size:11px;font-weight:600}
+.hcard.last{box-shadow:0 0 0 2px var(--turq)}
+
+/* Qo'llanma */
+.rules-box{max-width:440px;text-align:left;max-height:86dvh;display:flex;flex-direction:column}
+.rules-box h3{text-align:center}
+.rules-body{overflow-y:auto;padding-right:4px;font-size:14px;line-height:1.6}
+.rules-body h4{margin:14px 0 6px;color:var(--turq);font-size:14px;text-transform:uppercase;letter-spacing:1px}
+.rules-body p{margin:6px 0;color:var(--txt)}
+.rules-table{width:100%;border-collapse:collapse;margin:6px 0}
+.rules-table td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+.rules-table td:first-child{width:64px;color:var(--gold);font-weight:700;white-space:nowrap}
+.rules-box .btn{margin-top:14px;flex:0 0 auto}
