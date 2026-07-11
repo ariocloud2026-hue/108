@@ -75,7 +75,8 @@ Bu `/start` da **"▶️ O'ynash"** tugmasini chiqaradi va pastdagi menyu tugmas
 
 | Karta | Ochko |
 |---|---|
-| 6, 7, 8, 9, 10 | o'z qiymati |
+| 6, 7, 8, 10 | o'z qiymati |
+| **9** | **0** (sanalmaydi) |
 | J | 2 |
 | Q | 3 |
 | K | 4 |
@@ -85,6 +86,11 @@ Bu `/start` da **"▶️ O'ynash"** tugmasini chiqaradi va pastdagi menyu tugmas
 - Yolg'iz **Q** → 20
 - Yolg'iz **Q ♠** → 40
 - Yolg'iz **K ♠** → 80
+
+**G'olibning oxirgi kartasi jazo kartasi bo'lsa:** keyingi o'yinchi **avval kartalarni oladi**, keyin ochkolar sanaladi:
+- oxirgi karta **6** → keyingi 2 karta oladi
+- oxirgi karta **7** → keyingi 1 karta oladi
+- oxirgi karta **K ♠** → keyingi 4 karta oladi
 
 **G'olib bonusi:** raundni yutgan o'yinchining **oxirgi tashlagan kartasi K ♠** bo'lsa — ochkosidan **80 ayriladi** (minusga ham ketaveradi).
 
