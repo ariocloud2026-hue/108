@@ -4,12 +4,8 @@
  *  (Qo'shimcha kutubxona kerak emas — Node 18+ dagi fetch ishlatiladi.)
  */
 const TOKEN = process.env.BOT_TOKEN;
-const APP_URL = process.env.APP_URL; // masalan: https://108-game.onrender.com
-
-if (!TOKEN || !APP_URL) {
-  console.error('BOT_TOKEN va APP_URL kerak. Masalan:\n  BOT_TOKEN=123:abc APP_URL=https://sizning-domen node bot.js');
-  process.exit(1);
-}
+// Render manzilni o'zi beradi (RENDER_EXTERNAL_URL). Qo'lda ham berish mumkin: APP_URL
+const APP_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 async function call(method, body) {
@@ -89,4 +85,14 @@ async function poll() {
   poll();
 }
 
-setup().then(poll);
+/* Botni ishga tushirish. server.js shu funksiyani chaqiradi. */
+function startBot() {
+  if (!TOKEN) { console.log("BOT_TOKEN yo'q — bot ishga tushmadi (o'yin baribir ishlaydi)."); return; }
+  if (!APP_URL) { console.log("APP_URL/RENDER_EXTERNAL_URL yo'q — bot ishga tushmadi."); return; }
+  setup().then(poll).catch(e => console.error('bot xatosi:', e.message));
+}
+
+module.exports = { startBot };
+
+// Alohida ishga tushirilsa (node bot.js) — o'zi boshlaydi
+if (require.main === module) startBot();
