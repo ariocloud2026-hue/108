@@ -16,6 +16,13 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 app.get('/health', (_req, res) => res.send('ok'));
 
+// Mini App havolasini yasash uchun bot ma'lumoti
+app.get('/api/info', (_req, res) => {
+  let info = { username: null, app: 'play' };
+  try { info = require('./bot.js').getInfo() || info; } catch (_) {}
+  res.json(info);
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, maxPayload: 3 * 1024 * 1024 }); // 3MB — rasm/ovoz uchun
 
@@ -91,6 +98,7 @@ function createRoom(hostId) {
     lastWinnerId: null,
     pendingVote: null,       // {kind:'restart'|'end', proposerId, votes:{id:'yes'|'no'}}
     chat: [],                // oxirgi 60 ta xabar
+    call: null,              // {mode:'audio'|'video', members:[id]}
     log: [],
   };
   rooms.set(code, room);
@@ -124,29 +132,32 @@ function startRound(room) {
     pendingDraw: 0,
     pendingType: null,     // '6' | '7' | 'K'
     mustPlay: null,        // taladan olingan karta mos kelsa — shuni tashlash shart
+    mustMatch: false,      // 8 dan keyin: mos karta chiqmaguncha olish shart
+    history: [],           // o'ynalgan kartalar ketma-ketligi
     order: parts.map(p => p.id),
     pos: 0,
-    awaitingLead: false,
+    awaitingLead: false, // ishlatilmaydi (har raundda karta ochiladi)
   };
 
+  // HAR RAUNDDA o'rtaga bitta karta ochiladi (maxsus bo'lmagani tanlanadi)
+  let start = deck.pop();
+  const skipped = [];
+  while (start && isSpecialStart(start) && deck.length) { skipped.push(start); start = deck.pop(); }
+  deck.unshift(...skipped);
+  st.discard.push(start);
+  st.currentSuit = start.suit;
+  st.currentRank = start.rank;
+
   if (room.roundNumber === 1) {
-    // 1-raund: o'rtaga karta ochiladi (maxsus bo'lmaganini tanlaymiz), random o'yinchi boshlaydi
-    let start = deck.pop();
-    const skipped = [];
-    while (start && isSpecialStart(start) && deck.length) { skipped.push(start); start = deck.pop(); }
-    deck.unshift(...skipped);
-    st.discard.push(start);
-    st.currentSuit = start.suit;
-    st.currentRank = start.rank;
+    // 1-raund: tasodifiy o'yinchi boshlaydi
     st.pos = Math.floor(Math.random() * st.order.length);
     addLog(room, `1-raund boshlandi. O'rtada: ${cardText(start)}. Boshlaydi: ${nameOf(room, st.order[st.pos])}`);
   } else {
-    // 2+ raund: o'rtaga karta ochilmaydi. Ochkosi eng baland o'yinchi xohlagan kartasidan boshlaydi
+    // 2+ raund: OCHKOSI ENG BALAND o'yinchi boshlaydi
     let starterId = parts[0].id, best = -Infinity;
     for (const p of parts) if (p.cumulative > best) { best = p.cumulative; starterId = p.id; }
     st.pos = st.order.indexOf(starterId);
-    st.awaitingLead = true; // boshlovchi istalgan kartani tashlaydi
-    addLog(room, `${room.roundNumber}-raund. Ochkosi baland ${nameOf(room, starterId)} istalgan karta bilan boshlaydi.`);
+    addLog(room, `${room.roundNumber}-raund. O'rtada: ${cardText(start)}. Ochkosi baland ${nameOf(room, starterId)} boshlaydi.`);
   }
 
   room.st = st;
@@ -176,6 +187,14 @@ function inRoundPlayers(room) {
   return room.st.order.map(id => findPlayer(room, id)).filter(p => p && !p.foldedThisRound);
 }
 function allFoldedButOne(room) { return inRoundPlayers(room).length <= 1; }
+
+// Karta ustidagi kartaga mos keladimi (majburiyatlarni hisobga olmay)?
+function matches(st, card) {
+  if (card.rank === 'Q') return true;
+  if (card.suit === st.currentSuit) return true;
+  if (card.rank === st.currentRank) return true;
+  return false;
+}
 
 // Ushbu karta hozir tashlansa bo'ladimi?
 function canPlay(st, card) {
@@ -222,6 +241,7 @@ function cardText(c) {
  * ----------------------------------------------------------------------- */
 function applyEffect(room, card, declaredSuit) {
   const st = room.st;
+  st.mustMatch = false;
   st.currentRank = card.rank;
   if (card.rank === 'Q') {
     st.currentSuit = SUITS.includes(declaredSuit) ? declaredSuit : card.suit;
@@ -232,7 +252,7 @@ function applyEffect(room, card, declaredSuit) {
   switch (card.rank) {
     case '6': st.pendingDraw += 2; st.pendingType = '6'; advance(room, 1); break;
     case '7': st.pendingDraw += 1; st.pendingType = '7'; advance(room, 1); break;
-    case '8': /* qo'shimcha xod: navbat o'zida qoladi */ break;
+    case '8': st.mustMatch = true; /* qo'shimcha xod: mos karta chiqmaguncha oladi */ break;
     case 'A': advance(room, 2); break; // keyingi sakraladi (2 kishida o'ziga qaytadi)
     case 'K':
       if (card.suit === 'qarga') { st.pendingDraw += 4; st.pendingType = 'K'; }
@@ -259,6 +279,9 @@ function handlePlay(room, player, cardId, declaredSuit) {
   st.discard.push(card);
   st.awaitingLead = false;
   st.mustPlay = null;
+  st.mustMatch = false;
+  st.history.push({ rank: card.rank, suit: card.suit, by: player.name });
+  if (st.history.length > 20) st.history.shift();
   addLog(room, `${player.name}: ${cardText(card)}`);
 
   // Qo'l tugadi — raund yakuni (g'olib)
@@ -303,12 +326,30 @@ function handleDraw(room, player) {
     addLog(room, `${player.name} ${got} karta oldi (jazo).`);
     st.pendingDraw = 0; st.pendingType = null;
     advance(room, 1);
+  } else if (st.mustMatch) {
+    // 8 dan keyin: MOS KARTA CHIQMAGUNCHA olish shart
+    let taken = 0, found = null;
+    while (taken < 40) {
+      const got = drawN(room, player, 1);
+      if (!got) break;                       // tala butunlay tugadi
+      taken++;
+      const c = player.hand[player.hand.length - 1];
+      if (matches(st, c)) { found = c; break; }
+    }
+    if (found) {
+      st.mustPlay = found.id;
+      st.mustMatch = false;
+      addLog(room, `${player.name} ${taken} karta oldi — mos karta chiqdi, tashlashi kerak.`);
+    } else {
+      st.mustMatch = false;
+      addLog(room, `${player.name} ${taken} karta oldi, mos karta chiqmadi.`);
+      advance(room, 1);
+    }
   } else {
-    const before = player.hand.length;
     const got = drawN(room, player, 1);
     const card = got ? player.hand[player.hand.length - 1] : null;
 
-    if (card && canPlay(st, card)) {
+    if (card && matches(st, card)) {
       // Olingan karta mos keldi — o'yinchi shuni tashlashi SHART, xod o'tmaydi
       st.mustPlay = card.id;
       addLog(room, `${player.name} 1 karta oldi — mos keldi, tashlashi kerak.`);
@@ -474,6 +515,47 @@ function handleChat(room, player, m) {
   for (const p of room.players) send(p, { t: 'chat', msg });
 }
 
+/* ----------------------------------------------------------------------- *
+ *  AUDIO / VIDEO QO'NG'IROQ — WebRTC signalizatsiya
+ *  Server faqat "pochtachi": taklif/javob/ICE ni o'yinchilar orasida uzatadi.
+ * ----------------------------------------------------------------------- */
+function handleCall(room, player, m) {
+  if (m.action === 'join') {
+    const mode = m.mode === 'video' ? 'video' : 'audio';
+    if (!room.call) room.call = { mode, members: [] };
+    if (mode === 'video') room.call.mode = 'video';
+    if (!room.call.members.includes(player.id)) room.call.members.push(player.id);
+    addLog(room, `${player.name} qo'ng'iroqqa qo'shildi (${room.call.mode === 'video' ? 'video' : 'audio'}).`);
+    // Yangi kelganga mavjud a'zolar ro'yxatini beramiz — u ularga taklif yuboradi
+    send(player, { t: 'call-peers', peers: room.call.members.filter(id => id !== player.id), mode: room.call.mode });
+    broadcastState(room);
+    return;
+  }
+  if (m.action === 'leave') {
+    if (!room.call) return;
+    room.call.members = room.call.members.filter(id => id !== player.id);
+    for (const p of room.players) send(p, { t: 'call-left', id: player.id });
+    if (room.call.members.length === 0) room.call = null;
+    broadcastState(room);
+    return;
+  }
+}
+
+// WebRTC xabarlarini kerakli o'yinchiga uzatish (offer / answer / ice)
+function handleRtc(room, player, m) {
+  const target = findPlayer(room, String(m.to || ''));
+  if (!target) return;
+  send(target, { t: 'rtc', from: player.id, name: player.name, kind: m.kind, data: m.data });
+}
+
+function leaveCall(room, player) {
+  if (!room.call) return;
+  if (!room.call.members.includes(player.id)) return;
+  room.call.members = room.call.members.filter(id => id !== player.id);
+  for (const p of room.players) send(p, { t: 'call-left', id: player.id });
+  if (room.call.members.length === 0) room.call = null;
+}
+
 function restartGame(room) {
   room.roundNumber = 0;
   room.lastWinnerId = null;
@@ -515,6 +597,7 @@ function stateFor(room, me) {
     players: room.players.map(p => publicPlayer(room, p)),
     log: room.log.slice(),
     limit: LOSE_LIMIT,
+    call: room.call ? { mode: room.call.mode, members: room.call.members.map(id => ({ id, name: nameOf(room, id) })) } : null,
     canRestart: !me.usedRestart && !room.pendingVote,
     canEnd: !me.usedEnd && !room.pendingVote,
     pendingVote: room.pendingVote ? {
@@ -534,6 +617,8 @@ function stateFor(room, me) {
     base.drawCount = st.drawPile.length;
     base.awaitingLead = st.awaitingLead;
     base.mustPlay = st.mustPlay;
+    base.mustMatch = st.mustMatch;
+    base.history = st.history.slice(-12);
     base.currentPlayerId = currentId(room);
     base.yourTurn = currentId(room) === me.id && !me.foldedThisRound;
     base.you = { hand: me.hand || [] };
@@ -584,7 +669,7 @@ wss.on('connection', (ws) => {
     const room = rooms.get(roomCode);
     if (!room) return;
     const p = findPlayer(room, playerId);
-    if (p) { p.connected = false; p.ws = null; }
+    if (p) { p.connected = false; p.ws = null; leaveCall(room, p); }
     // agar hech kim ulanmagan bo'lsa — biroz kutib xonani tozalaymiz
     if (room.players.every(x => !x.connected)) {
       setTimeout(() => {
@@ -611,6 +696,8 @@ function handleMessage(ws, m) {
     case 'fold': return withRoom(ws, (room, p) => handleFold(room, p));
     case 'propose': return withRoom(ws, (room, p) => handlePropose(room, p, m.kind));
     case 'chat': return withRoom(ws, (room, p) => handleChat(room, p, m));
+    case 'call': return withRoom(ws, (room, p) => handleCall(room, p, m));
+    case 'rtc': return withRoom(ws, (room, p) => handleRtc(room, p, m));
     case 'vote': return withRoom(ws, (room, p) => handleVote(room, p, !!m.yes));
     case 'leave': return onLeave(ws);
   }
