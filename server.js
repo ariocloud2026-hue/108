@@ -36,7 +36,7 @@ const HAND_SIZE = 4;
 const LOSE_LIMIT = 108;
 
 // Sanoqdagi oddiy qiymat
-const VALUE = { '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 2, 'Q': 3, 'K': 4, 'A': 11 };
+const VALUE = { '6': 6, '7': 7, '8': 8, '9': 0, '10': 10, 'J': 2, 'Q': 3, 'K': 4, 'A': 11 }; // 9 = 0 ochko (sanalmaydi)
 
 // Raund boshidagi ochiladigan karta maxsus bo'lmasligi kerak (1-raund)
 function isSpecialStart(c) {
@@ -263,6 +263,25 @@ function handlePlay(room, player, cardId, declaredSuit) {
 
   // Qo'l tugadi — raund yakuni (g'olib)
   if (player.hand.length === 0) {
+    // Oxirgi karta 6 / 7 / K qarga bo'lsa — keyingi o'yinchi AVVAL jazo kartalarini oladi,
+    // shundan keyin ochkolar sanaladi.
+    let add = 0;
+    if (card.rank === '6') add = 2;
+    else if (card.rank === '7') add = 1;
+    else if (card.rank === 'K' && card.suit === 'qarga') add = 4;
+
+    if (add > 0) {
+      st.pendingDraw += add;                    // to'planib kelgan jazo ham qo'shiladi
+      const total = st.pendingDraw;
+      advance(room, 1);                         // keyingi o'yinchi
+      const victim = findPlayer(room, currentId(room));
+      if (victim && !victim.foldedThisRound) {
+        const got = drawN(room, victim, total);
+        addLog(room, `${victim.name} ${got} karta oldi (oxirgi ${cardText(card)} jazosi).`);
+      }
+      st.pendingDraw = 0;
+      st.pendingType = null;
+    }
     endRound(room, player.id, card);
     return;
   }
