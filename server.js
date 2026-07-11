@@ -465,6 +465,12 @@ function handleChat(room, player, m) {
   };
   room.chat.push(msg);
   if (room.chat.length > 60) room.chat.shift();
+  // Tarixda ko'pi bilan 12 ta media qolsin (rasm/ovoz og'ir bo'ladi)
+  const media = room.chat.filter(x => x.kind !== 'text');
+  if (media.length > 12) {
+    const drop = new Set(media.slice(0, media.length - 12).map(x => x.id));
+    room.chat = room.chat.filter(x => !drop.has(x.id));
+  }
   for (const p of room.players) send(p, { t: 'chat', msg });
 }
 
@@ -508,7 +514,6 @@ function stateFor(room, me) {
     isHost: me.id === room.hostId,
     players: room.players.map(p => publicPlayer(room, p)),
     log: room.log.slice(),
-    chat: room.chat.slice(),
     limit: LOSE_LIMIT,
     canRestart: !me.usedRestart && !room.pendingVote,
     canEnd: !me.usedEnd && !room.pendingVote,
@@ -547,6 +552,9 @@ function stateFor(room, me) {
   return base;
 }
 
+// Chat tarixi faqat ulanganda bir marta yuboriladi (har xodda emas!)
+function sendChatHistory(p, room) { send(p, { t: 'chathist', chat: room.chat.slice() }); }
+
 function send(p, obj) { try { if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(obj)); } catch (_) {} }
 function err(p, msg) { send(p, { t: 'error', msg }); }
 function broadcastState(room) { for (const p of room.players) send(p, stateFor(room, p)); }
@@ -555,7 +563,6 @@ function broadcastLobby(room) {
   for (const p of room.players) {
     send(p, {
       t: 'lobby', code: room.code, youId: p.id, isHost: p.id === room.hostId,
-      chat: room.chat.slice(),
       players: room.players.map(x => ({ id: x.id, name: x.name, isHost: x.id === room.hostId, connected: x.connected })),
     });
   }
@@ -627,6 +634,7 @@ function onHello(ws, m) {
     if (p) {
       p.ws = ws; p.connected = true; if (m.name) p.name = m.name;
       ws.meta = { roomCode: code, playerId: id };
+      sendChatHistory(p, room);
       if (room.phase === 'lobby') broadcastLobby(room); else broadcastState(room);
       return;
     }
@@ -642,6 +650,7 @@ function onCreate(ws, m) {
   const player = newPlayer(id, name, ws);
   room.players.push(player);
   ws.meta = { roomCode: room.code, playerId: id };
+  sendChatHistory(player, room);
   broadcastLobby(room);
 }
 
@@ -657,6 +666,7 @@ function onJoin(ws, m) {
   if (p) { p.ws = ws; p.connected = true; p.name = name; }
   else { p = newPlayer(id, name, ws); room.players.push(p); }
   ws.meta = { roomCode: room.code, playerId: id };
+  sendChatHistory(p, room);
   broadcastLobby(room);
 }
 
