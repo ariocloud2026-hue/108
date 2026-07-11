@@ -32,8 +32,9 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function onMessage(m) {
   switch (m.t) {
     case 'ready': roomCode = null; localStorage.removeItem('g108_room'); screenMenu(); break;
-    case 'lobby': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); loadChat(m.chat); renderLobby(m); break;
-    case 'state': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); loadChat(m.chat); renderState(m); break;
+    case 'lobby': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderLobby(m); break;
+    case 'state': S = m; roomCode = m.code; localStorage.setItem('g108_room', m.code); renderState(m); break;
+    case 'chathist': loadChat(m.chat); break;
     case 'chat': addChat(m.msg); break;
     case 'error': toast(m.msg); break;
   }
@@ -42,6 +43,7 @@ function onMessage(m) {
 /* ---------- Ekranlar ---------- */
 function screenMenu() {
   show($('menu')); hide($('lobby')); hide($('table'));
+  const fab = document.getElementById('chatFab'); if (fab) fab.classList.add('hidden');
   hide($('resultModal')); hide($('voteModal')); hide($('suitModal'));
   $('nameInput').value = myName;
 }
@@ -50,6 +52,7 @@ function screenTable() { hide($('menu')); hide($('lobby')); show($('table')); }
 
 function renderLobby(m) {
   screenLobby();
+  show($('chatFab'));
   $('lobbyCode').textContent = m.code;
   const ul = $('lobbyPlayers'); ul.innerHTML = '';
   m.players.forEach(p => {
@@ -69,6 +72,7 @@ function renderLobby(m) {
 function renderState(m) {
   if (m.phase === 'lobby') { renderLobby(m); return; }
   screenTable();
+  show($('chatFab'));
 
   // Raqiblar
   const wrap = $('opponents'); wrap.innerHTML = '';
