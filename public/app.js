@@ -184,6 +184,7 @@ function playCard(c) {
   if (c.rank === 'Q') { pendingCardId = c.id; show($('suitModal')); return; }
   send({ t: 'play', cardId: c.id });
 }
+$('startBtn').onclick = () => { haptic(); send({ t: 'start' }); };
 $('drawBtn').onclick = () => { haptic(); send({ t: 'draw' }); };
 $('foldBtn').onclick = () => { if (confirm('Rostdan taslim bo\'lasizmi? Qo\'lingizdagi kartalar ochko sifatida qo\'shiladi.')) send({ t: 'fold' }); };
 $('proposeBtn').onclick = () => { if (confirm('O\'yinni qaytadan boshlashni taklif qilasizmi? (bir marta)')) send({ t: 'propose' }); };
